@@ -1,0 +1,226 @@
+// Everything that fits in an inventory slot: blocks, materials, food and tools
+
+enum Item : u8 {
+    none
+    grass
+    dirt
+    stone
+    cobblestone
+    sand
+    log
+    leaves
+    planks
+    glass
+    brick
+    gravel
+    snow
+    crafting_table
+    wool
+    iron_ore
+    bedrock
+    stick
+    iron_ingot
+    leather
+    feather
+    porkchop
+    beef
+    mutton
+    chicken
+    wooden_pickaxe
+    wooden_axe
+    wooden_shovel
+    wooden_sword
+    stone_pickaxe
+    stone_axe
+    stone_shovel
+    stone_sword
+    iron_pickaxe
+    iron_axe
+    iron_shovel
+    iron_sword
+}
+
+// Every item, in the order the creative inventory shows them
+fn all_items() Array[Item] {
+    return Array[Item]{
+        Item.grass, Item.dirt, Item.stone, Item.cobblestone, Item.sand, Item.gravel, Item.snow, Item.log, Item.planks
+        Item.leaves, Item.glass, Item.brick, Item.wool, Item.crafting_table, Item.iron_ore, Item.bedrock, Item.stick, Item.iron_ingot
+        Item.leather, Item.feather, Item.porkchop, Item.beef, Item.mutton, Item.chicken
+        Item.wooden_pickaxe, Item.wooden_axe, Item.wooden_shovel, Item.wooden_sword
+        Item.stone_pickaxe, Item.stone_axe, Item.stone_shovel, Item.stone_sword
+        Item.iron_pickaxe, Item.iron_axe, Item.iron_shovel, Item.iron_sword
+    }
+}
+
+// The block an item places, or air
+fn item_block(item: Item) Block {
+    match item {
+        Item.grass => return Block.grass
+        Item.dirt => return Block.dirt
+        Item.stone => return Block.stone
+        Item.cobblestone => return Block.cobblestone
+        Item.sand => return Block.sand
+        Item.log => return Block.log
+        Item.leaves => return Block.leaves
+        Item.planks => return Block.planks
+        Item.glass => return Block.glass
+        Item.brick => return Block.brick
+        Item.gravel => return Block.gravel
+        Item.snow => return Block.snow
+        Item.crafting_table => return Block.crafting_table
+        Item.wool => return Block.wool
+        Item.iron_ore => return Block.iron_ore
+        Item.bedrock => return Block.bedrock
+        default => return Block.air
+    }
+}
+
+fn block_item(block: Block) Item {
+    match block {
+        Block.grass => return Item.grass
+        Block.dirt => return Item.dirt
+        Block.stone => return Item.stone
+        Block.cobblestone => return Item.cobblestone
+        Block.sand => return Item.sand
+        Block.log => return Item.log
+        Block.leaves => return Item.leaves
+        Block.planks => return Item.planks
+        Block.glass => return Item.glass
+        Block.brick => return Item.brick
+        Block.gravel => return Item.gravel
+        Block.snow => return Item.snow
+        Block.crafting_table => return Item.crafting_table
+        Block.wool => return Item.wool
+        Block.iron_ore => return Item.iron_ore
+        Block.bedrock => return Item.bedrock
+        default => return Item.none
+    }
+}
+
+fn item_name(item: Item) String {
+    match item {
+        Item.none => return ""
+        Item.grass => return "Grass"
+        Item.dirt => return "Dirt"
+        Item.stone => return "Stone"
+        Item.cobblestone => return "Cobblestone"
+        Item.sand => return "Sand"
+        Item.log => return "Log"
+        Item.leaves => return "Leaves"
+        Item.planks => return "Planks"
+        Item.glass => return "Glass"
+        Item.brick => return "Bricks"
+        Item.gravel => return "Gravel"
+        Item.snow => return "Snow"
+        Item.crafting_table => return "Crafting Table"
+        Item.wool => return "Wool"
+        Item.iron_ore => return "Iron Ore"
+        Item.bedrock => return "Bedrock"
+        Item.stick => return "Stick"
+        Item.iron_ingot => return "Iron Ingot"
+        Item.leather => return "Leather"
+        Item.feather => return "Feather"
+        Item.porkchop => return "Porkchop"
+        Item.beef => return "Beef"
+        Item.mutton => return "Mutton"
+        Item.chicken => return "Chicken"
+        Item.wooden_pickaxe => return "Wooden Pickaxe"
+        Item.wooden_axe => return "Wooden Axe"
+        Item.wooden_shovel => return "Wooden Shovel"
+        Item.wooden_sword => return "Wooden Sword"
+        Item.stone_pickaxe => return "Stone Pickaxe"
+        Item.stone_axe => return "Stone Axe"
+        Item.stone_shovel => return "Stone Shovel"
+        Item.stone_sword => return "Stone Sword"
+        Item.iron_pickaxe => return "Iron Pickaxe"
+        Item.iron_axe => return "Iron Axe"
+        Item.iron_shovel => return "Iron Shovel"
+        Item.iron_sword => return "Iron Sword"
+    }
+}
+
+fn item_tool(item: Item) Tool {
+    match item {
+        Item.wooden_pickaxe => return Tool.pickaxe
+        Item.stone_pickaxe => return Tool.pickaxe
+        Item.iron_pickaxe => return Tool.pickaxe
+        Item.wooden_axe => return Tool.axe
+        Item.stone_axe => return Tool.axe
+        Item.iron_axe => return Tool.axe
+        Item.wooden_shovel => return Tool.shovel
+        Item.stone_shovel => return Tool.shovel
+        Item.iron_shovel => return Tool.shovel
+        Item.wooden_sword => return Tool.sword
+        Item.stone_sword => return Tool.sword
+        Item.iron_sword => return Tool.sword
+        default => return Tool.none
+    }
+}
+
+// 1 wood, 2 stone, 3 iron; 0 for what is not a tool
+fn item_tier(item: Item) uint {
+    match item {
+        Item.wooden_pickaxe => return 1
+        Item.wooden_axe => return 1
+        Item.wooden_shovel => return 1
+        Item.wooden_sword => return 1
+        Item.stone_pickaxe => return 2
+        Item.stone_axe => return 2
+        Item.stone_shovel => return 2
+        Item.stone_sword => return 2
+        Item.iron_pickaxe => return 3
+        Item.iron_axe => return 3
+        Item.iron_shovel => return 3
+        Item.iron_sword => return 3
+        default => return 0
+    }
+}
+
+// How many uses a tool lasts
+fn item_durability(item: Item) u16 {
+    let tier = item_tier(item)
+    if tier == 1 : return 59
+    if tier == 2 : return 131
+    if tier == 3 : return 250
+    return 0
+}
+
+fn max_stack(item: Item) u8 {
+    return item_tool(item) == Tool.none ? 64 : 1
+}
+
+// Damage of a hit with it; a bare hand does 1
+fn attack_damage(item: Item) f32 {
+    let tier = item_tier(item).to(f32)
+    match item_tool(item) {
+        Tool.sword => return 3 + tier
+        Tool.axe => return 2 + tier
+        Tool.pickaxe => return 1 + tier
+        Tool.shovel => return 1 + tier * 0.5
+        Tool.none => return 1
+    }
+}
+
+// Health it gives back when eaten, 0 when it is not food
+fn food_value(item: Item) f32 {
+    if item == Item.porkchop || item == Item.beef : return 4
+    if item == Item.mutton : return 3
+    if item == Item.chicken : return 2
+    return 0
+}
+
+// What is in one inventory slot
+struct Stack {
+    item: Item (Item.none)
+    count: u8 (0)
+    // Uses of a tool so far
+    wear: u16 (0)
+}
+
+fn stack_of(item: Item, count: u8) Stack {
+    return Stack{ item: item, count: count }
+}
+
+fn is_empty(stack: Stack) bool {
+    return stack.count == 0 || stack.item == Item.none
+}

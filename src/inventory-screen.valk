@@ -1,0 +1,166 @@
+// The inventory window (E): crafting and moving stacks around in survival, picking any
+// item in creative
+
+use raylib
+
+value SLOT (46)
+value SLOT_STEP (50)
+
+// A click on a slot of `slots`, with the stack on the mouse
+fn click_slot(game: Game, slots: Array[Stack], index: uint, right: bool) {
+    let slot = slots[index]
+    let cursor = game.cursor
+    if right {
+        if is_empty(cursor) {
+            if is_empty(slot) : return
+            // Half, rounded up, onto the mouse
+            let half = (slot.count + 1) / 2
+            let taken = slot
+            taken.count = half
+            game.cursor = taken
+            slot.count -= half
+            slots[index] = slot.count == 0 ? Stack{} : slot
+            return
+        }
+        // One off the mouse
+        if is_empty(slot) || (slot.item == cursor.item && slot.count < max_stack(slot.item)) {
+            let placed = is_empty(slot) ? cursor : slot
+            placed.count = is_empty(slot) ? 1 : slot.count + 1
+            slots[index] = placed
+            cursor.count--
+            game.cursor = cursor.count == 0 ? Stack{} : cursor
+        }
+        return
+    }
+    if is_empty(cursor) {
+        game.cursor = slot
+        slots[index] = Stack{}
+    } else if is_empty(slot) {
+        slots[index] = cursor
+        game.cursor = Stack{}
+    } else if slot.item == cursor.item && slot.count < max_stack(slot.item) {
+        let room = max_stack(slot.item) - slot.count
+        let moved = cursor.count < room ? cursor.count : room
+        slot.count += moved
+        cursor.count -= moved
+        slots[index] = slot
+        game.cursor = cursor.count == 0 ? Stack{} : cursor
+    } else {
+        slots[index] = cursor
+        game.cursor = slot
+    }
+}
+
+// Shift-click in the inventory: the hotbar and the rest trade the stack
+fn quick_move(game: Game, index: uint) {
+    let stack = game.inventory.get(index)
+    if is_empty(stack) : return
+    game.inventory.set(index, Stack{})
+    let left = index < HOTBAR_SIZE ? game.inventory.add_between(stack, HOTBAR_SIZE, INVENTORY_SIZE) : game.inventory.add_between(stack, 0, HOTBAR_SIZE)
+    if !is_empty(left) : game.inventory.set(index, left)
+}
+
+// A row of the inventory's slots; handles clicks on them
+fn inventory_row(ui: Ui, game: Game, first: uint, x: i32, y: i32) {
+    each 0 .. HOTBAR_SIZE as i {
+        let index = first + i.to(uint)
+        let hot = ui.slot(game.inventory.get(index), x + i.to(i32) * SLOT_STEP.to(i32), y, SLOT.to(i32))
+        if !hot : continue
+        if ui.clicked && ui.shift : quick_move(game, index)
+        else if ui.clicked : click_slot(game, game.inventory.slots, index, false)
+        else if ui.right_clicked : click_slot(game, game.inventory.slots, index, true)
+    }
+}
+
+// Draws the window and handles the mouse in it
+fn inventory_screen(ui: Ui, game: Game) {
+    raylib.draw_rectangle(0, 0, screen_width(), screen_height(), raylib.Color.rgba(0, 0, 0, 130))
+    let step = SLOT_STEP.to(i32)
+    let width = 9 * step + 36
+    let top_rows : i32 = game.creative ? 4 : (game.craft_size == 3 ? 3 : 2)
+    let height = 60 + top_rows * step + 30 + (game.creative ? 0 : 3 * step + 12) + step + 24
+    let x = (screen_width() - width) / 2
+    let y = (screen_height() - height) / 2
+    ui.panel(x, y, width, height)
+    let left = x + 18
+    let dark = raylib.Color.rgb(64, 64, 64)
+    let inside = ui.over(x, y, width, height)
+
+    if game.creative {
+        raylib.draw_text("All items", left, y + 16, 20, dark)
+        let items = all_items()
+        each items as item, i {
+            let sx = left + (i % 9).to(i32) * step
+            let sy = y + 46 + (i / 9).to(i32) * step
+            let stack = stack_of(item, 1)
+            let hot = ui.slot(stack, sx, sy, SLOT.to(i32))
+            if hot && (ui.clicked || ui.right_clicked) {
+                // A full stack, or one with the right button; a stack on the mouse goes away
+                if !is_empty(game.cursor) {
+                    game.cursor = Stack{}
+                } else {
+                    game.cursor = stack_of(item, ui.right_clicked ? 1 : max_stack(item))
+                }
+            }
+        }
+        let hotbar_y = y + 46 + top_rows * step + 24
+        raylib.draw_text("Hotbar", left, hotbar_y - 22, 20, dark)
+        inventory_row(ui, game, 0, left, hotbar_y)
+    } else {
+        let title = game.craft_size == 3 ? "Crafting table" : "Crafting"
+        raylib.draw_text(title, left, y + 16, 20, dark)
+        let size = game.craft_size
+        let grid_x = left + step
+        each 0 .. size as gy {
+            each 0 .. size as gx {
+                let index = gy.to(uint) * size + gx.to(uint)
+                let hot = ui.slot(game.craft[index], grid_x + gx.to(i32) * step, y + 46 + gy.to(i32) * step, SLOT.to(i32))
+                if !hot : continue
+                if ui.clicked && ui.shift {
+                    game.craft[index] = game.inventory.add(game.craft[index])
+                } else if ui.clicked {
+                    click_slot(game, game.craft, index, false)
+                } else if ui.right_clicked {
+                    click_slot(game, game.craft, index, true)
+                }
+            }
+        }
+        // The arrow and the result
+        let rows = size.to(i32)
+        let arrow_x = grid_x + rows * step + 24
+        let middle = y + 46 + (rows * step) / 2 - 23
+        raylib.draw_rectangle(arrow_x, middle + 19, 40, 8, raylib.Color.rgb(139, 139, 139))
+        raylib.draw_triangle(.{ x: (arrow_x + 40).to(f32), y: (middle + 9).to(f32) }, .{ x: (arrow_x + 40).to(f32), y: (middle + 37).to(f32) }, .{ x: (arrow_x + 58).to(f32), y: (middle + 23).to(f32) }, raylib.Color.rgb(139, 139, 139))
+        let recipe = game.craft_recipe()
+        let result = isset(recipe) ? stack_of(recipe.result, recipe.count) : Stack{}
+        let result_x = arrow_x + 80
+        let hot = ui.slot(result, result_x, middle, SLOT.to(i32))
+        if hot && ui.clicked : game.take_craft(ui.shift)
+
+        let main_y = y + 46 + top_rows * step + 30
+        raylib.draw_text("Inventory", left, main_y - 24, 20, dark)
+        each 0 .. 3 as row : inventory_row(ui, game, HOTBAR_SIZE + row.to(uint) * HOTBAR_SIZE, left, main_y + row.to(i32) * step)
+        inventory_row(ui, game, 0, left, main_y + 3 * step + 12)
+    }
+
+    // A click outside the window throws what the mouse holds
+    if !inside && !is_empty(game.cursor) {
+        if ui.clicked {
+            game.throw_stack(game.cursor)
+            game.cursor = Stack{}
+        } else if ui.right_clicked {
+            let one = game.cursor
+            one.count = 1
+            game.throw_stack(one)
+            game.cursor.count--
+            if game.cursor.count == 0 : game.cursor = Stack{}
+        }
+    }
+
+    ui.draw_tooltip()
+    // The stack on the mouse, on top of everything
+    if !is_empty(game.cursor) {
+        let size = SLOT.to(f32)
+        ui.stack(game.cursor, ui.mouse.x - size / 2, ui.mouse.y - size / 2, size)
+    }
+}

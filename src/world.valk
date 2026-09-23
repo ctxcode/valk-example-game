@@ -12,6 +12,8 @@ class World {
     // Offsets of the chunks around the player, nearest first
     ring_x: Array[int] (.{})
     ring_z: Array[int] (.{})
+    // Chunks generated since the game last looked, to put animals in
+    fresh: Array[Chunk] (.{})
 
     static fn new(seed: uint, radius: int) World {
         let world = World{ terrain: Terrain.new(seed), radius: radius }
@@ -92,6 +94,7 @@ class World {
                 let chunk = Chunk{ cx: x, cz: z }
                 this.terrain.generate(chunk)
                 this.chunks.set(chunk_key(x, z), chunk)
+                this.fresh.append(chunk)
                 generated++
                 continue
             }
@@ -177,6 +180,7 @@ class World {
     fn unload() {
         each this.chunks as chunk : chunk.unload_meshes()
         this.chunks.clear()
+        this.fresh.clear()
     }
 
     // The first block that is not air or water along a ray, up to `reach` blocks away
@@ -200,7 +204,7 @@ class World {
         while travelled <= reach {
             let block = this.block(x, y, z)
             if block != Block.air && block != Block.water {
-                return RayHit{ x: x, y: y, z: z, normal_x: normal_x, normal_y: normal_y, normal_z: normal_z, block: block }
+                return RayHit{ x: x, y: y, z: z, normal_x: normal_x, normal_y: normal_y, normal_z: normal_z, block: block, distance: travelled }
             }
             if next_x < next_y && next_x < next_z {
                 x += step_x
@@ -238,6 +242,7 @@ class RayHit {
     normal_y: int
     normal_z: int
     block: Block
+    distance: f32
 }
 
 // Distance along the ray to the first block boundary on one axis

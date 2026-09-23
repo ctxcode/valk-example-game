@@ -1,9 +1,9 @@
-// The player: looking around, walking, jumping, swimming, flying and bumping into blocks
+// Moving boxes through the blocks, and the player: looking, walking, jumping, swimming, flying
 
 use raylib
 use valk.math
 
-value PLAYER_WIDTH (0.6)
+value PLAYER_HALF_WIDTH (0.3)
 value PLAYER_HEIGHT (1.8)
 value EYE_HEIGHT (1.62)
 value GRAVITY (28.0)
@@ -12,20 +12,134 @@ value WALK_SPEED (4.4)
 value SPRINT_SPEED (6.6)
 value FLY_SPEED (12.0)
 value MOUSE_SENSITIVITY (0.0025)
+value MAX_HEALTH (20.0)
+value MAX_BREATH (10.0)
 
-class Player {
-    // Feet, in the middle of the body
+// A box standing on its feet: the player, an animal or a dropped item
+class Body {
+    // Feet, in the middle of the box
     position: raylib.Vector3
     velocity: raylib.Vector3 (.{})
+    half: f32
+    height: f32
+    on_ground: bool (false)
+    // The last move ran into a wall
+    blocked: bool (false)
+
+    // Moves by the velocity, in steps small enough to never skip a block
+    fn move(world: World, dt: f32) {
+        let steps = 1 + math.floor(this.velocity.length().to(float) * dt.to(float) / 0.4).to(int)
+        let step_dt = dt / steps.to(f32)
+        this.on_ground = false
+        this.blocked = false
+        each 0 .. steps as _ {
+            this.move_axis(world, 0, this.velocity.x * step_dt)
+            this.move_axis(world, 2, this.velocity.z * step_dt)
+            this.move_axis(world, 1, this.velocity.y * step_dt)
+        }
+    }
+
+    // Moves along one axis (0 = x, 1 = y, 2 = z) and stops against the first solid block
+    fn move_axis(world: World, axis: uint, amount: f32) {
+        if amount == 0 : return
+        let moved = this.position
+        if axis == 0 : moved.x += amount
+        else if axis == 1 : moved.y += amount
+        else : moved.z += amount
+        if !this.collides(world, moved) {
+            this.position = moved
+            return
+        }
+        // Stand right against the block instead
+        let half = this.half
+        let gap : f32 = 0.001
+        if axis == 0 {
+            moved.x = amount > 0 ? math.floor(moved.x + half).to(f32) - half - gap : math.floor(moved.x - half).to(f32) + 1 + half + gap
+            this.velocity.x = 0
+            this.blocked = true
+        } else if axis == 2 {
+            moved.z = amount > 0 ? math.floor(moved.z + half).to(f32) - half - gap : math.floor(moved.z - half).to(f32) + 1 + half + gap
+            this.velocity.z = 0
+            this.blocked = true
+        } else {
+            if amount > 0 {
+                moved.y = math.floor(moved.y + this.height).to(f32) - this.height - gap
+            } else {
+                moved.y = math.floor(moved.y).to(f32) + 1
+                this.on_ground = true
+            }
+            this.velocity.y = 0
+        }
+        if !this.collides(world, moved) : this.position = moved
+    }
+
+    fn collides(world: World, feet: raylib.Vector3) bool {
+        let x0 = math.floor(feet.x - this.half).to(int)
+        let x1 = math.floor(feet.x + this.half).to(int)
+        let y0 = math.floor(feet.y).to(int)
+        let y1 = math.floor(feet.y + this.height).to(int)
+        let z0 = math.floor(feet.z - this.half).to(int)
+        let z1 = math.floor(feet.z + this.half).to(int)
+        let x = x0
+        while x <= x1 {
+            let y = y0
+            while y <= y1 {
+                let z = z0
+                while z <= z1 {
+                    if is_solid(world.block(x, y, z)) : return true
+                    z++
+                }
+                y++
+            }
+            x++
+        }
+        return false
+    }
+
+    // Whether a block would be inside the box, e.g. to not place one there
+    fn overlaps(x: int, y: int, z: int) bool {
+        let fx = x.to(f32)
+        let fy = y.to(f32)
+        let fz = z.to(f32)
+        return this.position.x + this.half > fx && this.position.x - this.half < fx + 1
+            && this.position.y + this.height > fy && this.position.y < fy + 1
+            && this.position.z + this.half > fz && this.position.z - this.half < fz + 1
+    }
+
+    fn block_at(world: World, dy: f32) Block {
+        return world.block(math.floor(this.position.x).to(int), math.floor(this.position.y + dy).to(int), math.floor(this.position.z).to(int))
+    }
+
+    fn bounds() raylib.BoundingBox {
+        let p = this.position
+        return raylib.BoundingBox{
+            min: .{ x: p.x - this.half, y: p.y, z: p.z - this.half }
+            max: .{ x: p.x + this.half, y: p.y + this.height, z: p.z + this.half }
+        }
+    }
+}
+
+class Player {
+    body: Body
     // Radians: yaw around the up axis, pitch up and down
     yaw: f32 (0)
     pitch: f32 (0)
-    on_ground: bool (false)
     flying: bool (false)
     in_water: bool (false)
+    health: f32 (MAX_HEALTH)
+    breath: f32 (MAX_BREATH)
+    // Red flash after damage, seconds left
+    hurt: f32 (0)
+    // The highest point of the current fall
+    fall_top: f32 (0)
+
+    static fn at(position: raylib.Vector3) Player {
+        let body = Body{ position: position, half: PLAYER_HALF_WIDTH.to(f32), height: PLAYER_HEIGHT.to(f32) }
+        return Player{ body: body, fall_top: position.y }
+    }
 
     fn eye() raylib.Vector3 {
-        return this.position + raylib.Vector3{ y: EYE_HEIGHT.to(f32) }
+        return this.body.position + raylib.Vector3{ y: EYE_HEIGHT.to(f32) }
     }
 
     fn forward() raylib.Vector3 {
@@ -55,120 +169,79 @@ class Player {
         if this.pitch < -limit : this.pitch = -limit
     }
 
-    fn update(world: World, dt: f32) {
-        let feet_block = world.block(math.floor(this.position.x).to(int), math.floor(this.position.y + 0.4).to(int), math.floor(this.position.z).to(int))
-        this.in_water = feet_block == Block.water
+    // Moves by the keys held down (none when `input` is off). Returns how far the player
+    // fell when landing this frame, for fall damage.
+    fn update(world: World, dt: f32, input: bool) f32 {
+        let body = this.body
+        this.in_water = body.block_at(world, 0.4) == Block.water
 
         // Where the keys want to go, flat on the ground
         let flat = raylib.Vector3{ x: math.cos(this.yaw).to(f32), z: math.sin(this.yaw).to(f32) }
         let right = raylib.Vector3{ x: -flat.z, z: flat.x }
         let wish = raylib.Vector3{}
-        if raylib.is_key_down(.w) : wish = wish + flat
-        if raylib.is_key_down(.s) : wish = wish - flat
-        if raylib.is_key_down(.d) : wish = wish + right
-        if raylib.is_key_down(.a) : wish = wish - right
+        let jump = false
+        let sprint = false
+        let down = false
+        if input {
+            if raylib.is_key_down(.w) : wish = wish + flat
+            if raylib.is_key_down(.s) : wish = wish - flat
+            if raylib.is_key_down(.d) : wish = wish + right
+            if raylib.is_key_down(.a) : wish = wish - right
+            jump = raylib.is_key_down(.space)
+            sprint = raylib.is_key_down(.left_control) || raylib.is_key_down(.r)
+            down = raylib.is_key_down(.left_shift)
+        }
         wish = wish.normalize()
 
-        let sprint = raylib.is_key_down(.left_control) || raylib.is_key_down(.r)
         if this.flying {
             let speed = FLY_SPEED.to(f32) * (sprint ? 2 : 1)
-            this.velocity = wish.scale(speed)
-            if raylib.is_key_down(.space) : this.velocity.y = speed
-            if raylib.is_key_down(.left_shift) : this.velocity.y = -speed
+            body.velocity = wish.scale(speed)
+            if jump : body.velocity.y = speed
+            if down : body.velocity.y = -speed
         } else {
             let speed = (sprint ? SPRINT_SPEED : WALK_SPEED).to(f32)
             if this.in_water : speed *= 0.55
             // Quick to change direction on the ground, slow in the air
-            let grip : f32 = this.on_ground ? 14 : 3
+            let grip : f32 = body.on_ground ? 14 : 3
             let blend : f32 = grip * dt > 1 ? 1 : grip * dt
-            this.velocity.x += (wish.x * speed - this.velocity.x) * blend
-            this.velocity.z += (wish.z * speed - this.velocity.z) * blend
+            body.velocity.x += (wish.x * speed - body.velocity.x) * blend
+            body.velocity.z += (wish.z * speed - body.velocity.z) * blend
             if this.in_water {
-                this.velocity.y -= GRAVITY.to(f32) * 0.25 * dt
-                if raylib.is_key_down(.space) : this.velocity.y = 3.5
-                if this.velocity.y < -3 : this.velocity.y = -3
+                body.velocity.y -= GRAVITY.to(f32) * 0.25 * dt
+                if jump : body.velocity.y = 3.5
+                if body.velocity.y < -3 : body.velocity.y = -3
             } else {
-                this.velocity.y -= GRAVITY.to(f32) * dt
-                if this.on_ground && raylib.is_key_down(.space) : this.velocity.y = JUMP_SPEED.to(f32)
-                if this.velocity.y < -50 : this.velocity.y = -50
+                body.velocity.y -= GRAVITY.to(f32) * dt
+                if body.on_ground && jump : body.velocity.y = JUMP_SPEED.to(f32)
+                if body.velocity.y < -50 : body.velocity.y = -50
             }
         }
 
-        // Small steps, so a fast fall never skips a block
-        let steps = 1 + math.floor(this.velocity.length().to(float) * dt.to(float) / 0.4).to(int)
-        let step_dt = dt / steps.to(f32)
-        this.on_ground = false
-        each 0 .. steps as _ {
-            this.move_axis(world, 0, this.velocity.x * step_dt)
-            this.move_axis(world, 2, this.velocity.z * step_dt)
-            this.move_axis(world, 1, this.velocity.y * step_dt)
+        let was_on_ground = body.on_ground
+        body.move(world, dt)
+
+        // Falls are measured from their highest point; water and flying end them
+        if body.on_ground || this.in_water || this.flying {
+            let fell = this.fall_top - body.position.y
+            this.fall_top = body.position.y
+            if body.on_ground && !was_on_ground && !this.in_water && !this.flying : return fell
+            return 0
         }
+        if body.position.y > this.fall_top : this.fall_top = body.position.y
+        return 0
     }
 
-    // Moves along one axis (0 = x, 1 = y, 2 = z) and stops against the first solid block
-    fn move_axis(world: World, axis: uint, amount: f32) {
-        if amount == 0 : return
-        let moved = this.position
-        if axis == 0 : moved.x += amount
-        else if axis == 1 : moved.y += amount
-        else : moved.z += amount
-        if !collides(world, moved) {
-            this.position = moved
-            return
+    // Eyes under water: breath runs out, then it hurts. Returns the damage of this frame.
+    fn breathe(world: World, dt: f32) f32 {
+        let eye = this.eye()
+        let under = world.block(math.floor(eye.x).to(int), math.floor(eye.y).to(int), math.floor(eye.z).to(int)) == Block.water
+        if !under {
+            this.breath = MAX_BREATH.to(f32)
+            return 0
         }
-        // Stand right against the block instead
-        let half = (PLAYER_WIDTH / 2).to(f32)
-        let gap : f32 = 0.001
-        if axis == 0 {
-            moved.x = amount > 0 ? math.floor(moved.x + half).to(f32) - half - gap : math.floor(moved.x - half).to(f32) + 1 + half + gap
-            this.velocity.x = 0
-        } else if axis == 2 {
-            moved.z = amount > 0 ? math.floor(moved.z + half).to(f32) - half - gap : math.floor(moved.z - half).to(f32) + 1 + half + gap
-            this.velocity.z = 0
-        } else {
-            if amount > 0 {
-                moved.y = math.floor(moved.y + PLAYER_HEIGHT.to(f32)).to(f32) - PLAYER_HEIGHT.to(f32) - gap
-            } else {
-                moved.y = math.floor(moved.y).to(f32) + 1
-                this.on_ground = true
-            }
-            this.velocity.y = 0
-        }
-        if !collides(world, moved) : this.position = moved
+        this.breath -= dt
+        if this.breath > 0 : return 0
+        this.breath += 1
+        return 2
     }
-
-    // Whether a block would be inside the player, e.g. to not place one there
-    fn overlaps(x: int, y: int, z: int) bool {
-        let half = (PLAYER_WIDTH / 2).to(f32)
-        let fx = x.to(f32)
-        let fy = y.to(f32)
-        let fz = z.to(f32)
-        return this.position.x + half > fx && this.position.x - half < fx + 1
-            && this.position.y + PLAYER_HEIGHT.to(f32) > fy && this.position.y < fy + 1
-            && this.position.z + half > fz && this.position.z - half < fz + 1
-    }
-}
-
-fn collides(world: World, feet: raylib.Vector3) bool {
-    let half = (PLAYER_WIDTH / 2).to(f32)
-    let x0 = math.floor(feet.x - half).to(int)
-    let x1 = math.floor(feet.x + half).to(int)
-    let y0 = math.floor(feet.y).to(int)
-    let y1 = math.floor(feet.y + PLAYER_HEIGHT.to(f32)).to(int)
-    let z0 = math.floor(feet.z - half).to(int)
-    let z1 = math.floor(feet.z + half).to(int)
-    let x = x0
-    while x <= x1 {
-        let y = y0
-        while y <= y1 {
-            let z = z0
-            while z <= z1 {
-                if is_solid(world.block(x, y, z)) : return true
-                z++
-            }
-            y++
-        }
-        x++
-    }
-    return false
 }

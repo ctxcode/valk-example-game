@@ -1,12 +1,13 @@
 # Valkcraft
 
 A small Minecraft-like game written in [Valk](https://valk-lang.dev), on top of
-[valk-raylib](https://github.com/ctxcode/valk-raylib). An endless world of hills, beaches,
-forests and mountains to walk around in and build on, with caves below to dig into.
+[valk-raylib](https://github.com/ctxcode/valk-raylib). Endless worlds of hills, beaches,
+forests and mountains, with caves below; survival with crafting, tools and animals, or
+creative with every block.
 
-![An island with a forested hill](docs/island.jpg)
+![The title screen](docs/title.jpg)
 
-![Building with bricks](docs/building.jpg)
+![Animals](docs/animals.jpg)
 
 ## Play
 
@@ -25,23 +26,64 @@ make run
 To build with a compiler of your own, put `vc := ~/path/to/valk` in a file `local.mk`
 (git ignores it), or run `make run vc=~/path/to/valk`.
 
+The title screen makes a new world: type a seed (a number, or any text) or leave it empty
+for a random one, and pick the game mode.
+
+- **Survival:** 10 hearts. Falling more than 3 blocks hurts, and so does staying under water
+  once the air runs out; health slowly comes back, and food brings it back faster. Broken
+  blocks drop as items to pick up, placing a block uses one, and dying drops everything.
+- **Creative:** every item from the inventory, blocks break at once, you can fly, and
+  nothing hurts.
+
 | key | |
 | --- | --- |
 | WASD, mouse | walk and look |
 | Space | jump, swim up |
 | Ctrl or R | sprint |
-| Left click | break the block you look at |
-| Right click | place the block in hand |
-| 1-9, mouse wheel | pick a block |
-| F | fly: Space goes up, Shift down |
+| Left mouse | break the block you look at (hold), hit an animal |
+| Right mouse | place a block, eat, open a crafting table |
+| 1-9, mouse wheel | pick a hotbar slot |
+| E | inventory |
+| Q | drop the held item |
+| F | fly, in creative: Space goes up, Shift down |
 | F2 | screenshot |
 | H | hide the help |
-| Esc | let go of the mouse |
+| Esc | game menu |
 
-Options: `--seed N` for another world, `--distance N` for how many chunks you see in
-each direction (8 by default), `--size 1920x1080` for the window. `--screenshot FILE` renders
-one frame once the world is loaded and quits; `--at X,Z`, `--up BLOCKS`, `--yaw` and `--pitch`
-pick the view, and `--hud` keeps the crosshair and hotbar in it.
+In the inventory a click picks a stack up or puts it down, a right click takes half or
+puts one down, and shift-click moves a stack between the hotbar and the rest. A click
+outside the window drops what the mouse holds.
+
+## Crafting, tools and animals
+
+![Crafting an iron pickaxe](docs/crafting.jpg)
+
+The inventory has a 2x2 crafting grid; a crafting table (right click it) has a 3x3 one.
+Shapes can go anywhere in the grid, and mirrored:
+
+| recipe | makes |
+| --- | --- |
+| a log | 4 planks |
+| two planks, one above the other | 4 sticks |
+| 2x2 planks | a crafting table |
+| three of a material over two sticks down the middle | a pickaxe |
+| two over one and a stick, a stick below | an axe |
+| one over two sticks | a shovel |
+| two over a stick | a sword |
+
+The material is planks, cobblestone or iron ingots, for wooden, stone and iron tools.
+
+![Mining](docs/mining.jpg)
+
+Every block takes a while to break, shown by cracks: shovels are for dirt, grass, sand,
+gravel and snow, axes for wood, pickaxes for stone. A better tool is faster (wood 2x, stone
+4x, iron 6x). Stone gives nothing without a pickaxe, and iron ore needs a stone one; it
+drops iron ingots, since there is no furnace. Tools wear out: a bar under the icon shows
+what is left. Leaves sometimes drop a stick; glass drops nothing.
+
+Pigs, cows, sheep and chickens wander around grassland. Hit one and it runs; kill it and it
+drops porkchops, beef and leather, mutton and wool, or chicken and feathers. Swords hit
+hardest. Right click with meat to eat it.
 
 ![A forest under the clouds](docs/forest.jpg)
 
@@ -49,19 +91,30 @@ pick the view, and `--hud` keeps the crosshair and hotbar in it.
 
 | file | |
 | --- | --- |
-| `src/main.valk` | the window, input and the frame |
+| `src/main.valk` | the screens (title, new world, loading, playing, inventory, paused, dead) and the options |
+| `src/game.valk` | a world being played: the player, inventory, animals, drops, breaking, placing, fighting, damage |
 | `src/terrain.valk` | world generation: a height map from layered Perlin noise (continents, hills, ridged mountains), sand at the shore, snow up high, caves from 3D noise a few blocks under the ground, and trees |
 | `src/noise.valk` | seeded Perlin noise |
 | `src/chunk.valk` | chunks of 16 x 96 x 16 blocks, and the mesher: only faces next to air get drawn, each corner darkened by the blocks around it (ambient occlusion) |
 | `src/world.valk` | loading chunks around the player nearest first, a few per frame, dropping them far away, drawing them, and the ray that finds the block you look at |
-| `src/player.valk` | walking, jumping, swimming and flying, colliding one axis at a time |
-| `src/atlas.valk` | all block textures, painted pixel by pixel at startup: there are no image files |
-| `src/shaders.valk` | fog that fades the world into the sky, and see-through leaves and glass |
+| `src/player.valk` | boxes moving through the blocks, one axis at a time; walking, jumping, swimming, flying, falls and breath |
+| `src/blocks.valk`, `src/items.valk` | what every block and item is: textures, hardness, tools, drops, damage, food |
+| `src/inventory.valk`, `src/crafting.valk` | stacks in slots, and recipes matched anywhere in the grid |
+| `src/mobs.valk`, `src/drops.valk` | animals (models of boxes with swinging legs, wandering, fleeing, loot) and items lying around |
+| `src/atlas.valk`, `src/sprites.valk` | all textures, painted at startup: block tiles pixel by pixel, item sprites from rows of text. There are no image files |
+| `src/resources.valk` | the shader, meshes, and inventory icons rendered from 3D cubes |
+| `src/ui.valk`, `src/menu.valk`, `src/hud.valk`, `src/inventory-screen.valk` | buttons, slots, the menus, the HUD and the inventory window |
+| `src/shaders.valk` | fog that fades the world into the sky, see-through leaves and glass, the red flash of a hurt animal |
 | `src/clouds.valk` | a layer of clouds drifting by |
-| `src/hud.valk` | crosshair, hotbar and text |
 
-Blocks you change are kept while the game runs; the world itself comes from the seed, so
-nothing is saved to disk.
+Blocks you change are kept while the game runs; nothing is saved to disk.
+
+Options for trying things out: `--seed TEXT` and `--creative` start a world right away,
+`--kit` starts with tools and blocks, `--animals` puts one of each animal in front of you,
+`--distance N` sets how many chunks you see, `--size 1920x1080` the window, and
+`--screenshot FILE` renders one frame and quits (`--title`, `--inventory` or `--hud` for
+what is on it; `--at X,Z`, `--up N`, `--yaw`, `--pitch` for the view). `--frames N` plays N
+frames and prints the frame rate.
 
 ## Tests
 
@@ -69,6 +122,7 @@ nothing is saved to disk.
 make test
 ```
 
-The tests in `src/tests.valk` run without a window: terrain generation, trees that cross
-chunk borders, block lookups at negative coordinates, the block ray, falling and bumping
-into walls, and which faces the mesher emits.
+The tests in `src/tests.valk` run without a window: terrain, trees across chunk borders,
+negative coordinates, the block ray, physics, the mesher, recipes, stacks, break times and
+drops, picking items up, fall damage and dying, animals getting hurt and their loot, and
+seeds from text.

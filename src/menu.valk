@@ -1,0 +1,119 @@
+// The title screen, making a new world, the pause menu and the death screen
+
+use raylib
+use valk.math
+
+enum MenuAction : u8 {
+    none
+    open_create
+    create
+    back
+    quit
+    resume
+    respawn
+    to_title
+    toggle_mode
+}
+
+fn draw_logo(time: f32) {
+    let w = screen_width()
+    let y = screen_height() / 5
+    // Chiselled letters: a dark rim under stone-gray ones
+    text_centered("VALKCRAFT", w / 2 + 5, y + 6, 96, raylib.Color.rgb(40, 40, 40))
+    text_centered("VALKCRAFT", w / 2, y, 96, raylib.Color.rgb(196, 196, 196))
+    text_centered("VALKCRAFT", w / 2, y - 3, 96, raylib.Color.rgb(226, 226, 226))
+    // The yellow splash, pulsing
+    let pulse = 1 + math.sin(time.to(float) * 6).to(f32) * 0.05
+    let font = raylib.get_font_default()
+    let text = "Made with Valk!"
+    let size = 26 * pulse
+    let measured = raylib.measure_text_ex(font, text, size, 2)
+    let at = raylib.Vector2{ x: (w / 2 + 300).to(f32), y: (y + 96).to(f32) }
+    let origin = raylib.Vector2{ x: measured.x / 2, y: measured.y / 2 }
+    raylib.draw_text_pro(font, text, at + raylib.Vector2{ x: 3, y: 3 }, origin, -18, size, 2, raylib.Color.rgb(62, 62, 0))
+    raylib.draw_text_pro(font, text, at, origin, -18, size, 2, raylib.Color.rgb(255, 255, 0))
+}
+
+fn title_screen(ui: Ui, time: f32) MenuAction {
+    let w = screen_width()
+    let h = screen_height()
+    draw_logo(time)
+    let bw : i32 = 400
+    let x = (w - bw) / 2
+    let y = h / 2 + 10
+    let action = MenuAction.none
+    if ui.button("Create New World", x, y, bw, 48) : action = MenuAction.open_create
+    if ui.button("Quit Game", x, y + 64, bw, 48) : action = MenuAction.quit
+    text_shadowed("Valkcraft, with raylib " + raylib.RAYLIB_VERSION, 10, h - 28, 18, raylib.WHITE)
+    let credit = "Written in Valk"
+    text_shadowed(credit, w - raylib.measure_text(credit, 18) - 10, h - 28, 18, raylib.WHITE)
+    return action
+}
+
+fn create_screen(ui: Ui, seed_text: String, creative: bool, time: f32) MenuAction {
+    let w = screen_width()
+    let h = screen_height()
+    raylib.draw_rectangle(0, 0, w, h, raylib.Color.rgba(0, 0, 0, 110))
+    text_centered_shadowed("Create New World", w / 2, 60, 36, raylib.WHITE)
+    let fw : i32 = 440
+    let x = (w - fw) / 2
+    let y = h / 2 - 150
+    text_shadowed("Seed for the world generator", x, y, 20, raylib.Color.rgb(200, 200, 200))
+    let blink = math.mod(time.to(float), 1) < 0.5
+    ui.text_field(seed_text, x, y + 28, fw, 44, blink)
+    text_shadowed("Leave it empty for a random seed", x, y + 80, 18, raylib.Color.rgb(160, 160, 160))
+
+    let action = MenuAction.none
+    if ui.button("Game Mode: " + (creative ? "Creative" : "Survival"), x, y + 130, fw, 48) : action = MenuAction.toggle_mode
+    let about = creative ? "Every block, flying, nothing can hurt you" : "Gather, craft tools, hunt, and stay alive"
+    text_centered_shadowed(about, w / 2, y + 190, 18, raylib.Color.rgb(200, 200, 200))
+
+    let bw = (fw - 16) / 2
+    if ui.button("Create New World", x, h - 110, bw, 48) : action = MenuAction.create
+    if ui.button("Cancel", x + bw + 16, h - 110, bw, 48) : action = MenuAction.back
+    if raylib.is_key_pressed(.enter) : action = MenuAction.create
+    if raylib.is_key_pressed(.escape) : action = MenuAction.back
+    return action
+}
+
+fn pause_screen(ui: Ui, game: Game) MenuAction {
+    let w = screen_width()
+    let h = screen_height()
+    raylib.draw_rectangle(0, 0, w, h, raylib.Color.rgba(0, 0, 0, 140))
+    text_centered_shadowed("Game Menu", w / 2, h / 2 - 140, 36, raylib.WHITE)
+    let bw : i32 = 400
+    let x = (w - bw) / 2
+    let action = MenuAction.none
+    if ui.button("Back to Game", x, h / 2 - 60, bw, 48) : action = MenuAction.resume
+    if ui.button("Quit to Title", x, h / 2 + 4, bw, 48) : action = MenuAction.to_title
+    let about = (game.creative ? "Creative" : "Survival") + " world, seed " + game.seed
+    text_centered_shadowed(about, w / 2, h / 2 + 80, 18, raylib.Color.rgb(200, 200, 200))
+    text_centered_shadowed("The world is not saved when you quit", w / 2, h / 2 + 104, 18, raylib.Color.rgb(160, 160, 160))
+    return action
+}
+
+fn death_screen(ui: Ui, game: Game) MenuAction {
+    let w = screen_width()
+    let h = screen_height()
+    raylib.draw_rectangle(0, 0, w, h, raylib.Color.rgba(120, 0, 0, 120))
+    text_centered_shadowed("You died!", w / 2, h / 2 - 150, 64, raylib.WHITE)
+    text_centered_shadowed("You " + game.death_cause, w / 2, h / 2 - 70, 22, raylib.Color.rgb(230, 230, 230))
+    let bw : i32 = 400
+    let x = (w - bw) / 2
+    let action = MenuAction.none
+    if ui.button("Respawn", x, h / 2, bw, 48) : action = MenuAction.respawn
+    if ui.button("Title Screen", x, h / 2 + 64, bw, 48) : action = MenuAction.to_title
+    return action
+}
+
+// A seed from what was typed: a number as it is, other text hashed, nothing random
+fn seed_from_text(text: String) uint {
+    let trimmed = text.trim(" ")
+    if trimmed.bytes == 0 : return raylib.get_random_value(1, 2147483647).to(uint)
+    let number = trimmed.to(uint) ! {
+        let h : uint = 7
+        each trimmed as byte : h = h * 31 + byte.to(uint)
+        return h & 0xffffffff
+    }
+    return number
+}

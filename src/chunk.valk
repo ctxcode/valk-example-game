@@ -222,6 +222,34 @@ class Mesher {
         this.uvs[3] = raylib.Vector2{ x: u0, y: v0 }
     }
 
+    // A box from `min` to `max`, lit like the blocks: the faces of `block`, or `tile` on
+    // every face when `block` is air. For items, cracks and animals.
+    fn add_box(builder: raylib.MeshBuilder, min: raylib.Vector3, max: raylib.Vector3, color: raylib.Color, block: Block, tile: uint) {
+        each 0 .. 6 as face {
+            let f = face.to(uint)
+            this.set_uvs(block == Block.air ? tile : block_tile(block, f))
+            let light = this.face_light[f]
+            let shaded = raylib.Color{
+                r: (color.r.to(f32) * light).to(u8)
+                g: (color.g.to(f32) * light).to(u8)
+                b: (color.b.to(f32) * light).to(u8)
+                a: color.a
+            }
+            let i : uint = 0
+            while i < 4 {
+                let c = f * 12 + i * 3
+                this.positions[i] = raylib.Vector3{
+                    x: this.corners[c] == 1 ? max.x : min.x
+                    y: this.corners[c + 1] == 1 ? max.y : min.y
+                    z: this.corners[c + 2] == 1 ? max.z : min.z
+                }
+                i++
+            }
+            let normal = raylib.Vector3{ x: this.normals[f * 3].to(f32), y: this.normals[f * 3 + 1].to(f32), z: this.normals[f * 3 + 2].to(f32) }
+            each this.straight as k : builder.vertex(this.positions[k], this.uvs[k], normal, shaded)
+        }
+    }
+
     // Water: no shading, and the top a little lower than a full block
     fn water_face(x: int, y: int, z: int, f: uint, neighbor: Block) {
         if neighbor != Block.air : return

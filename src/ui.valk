@@ -1,0 +1,128 @@
+// Buttons, panels, text fields and slots, drawn and clicked in the same call
+
+use raylib
+use valk.math
+
+class Ui {
+    res: Resources
+    mouse: raylib.Vector2 (.{})
+    clicked: bool (false)
+    right_clicked: bool (false)
+    shift: bool (false)
+    // The name to show next to the mouse, set by a slot it is over
+    tooltip: String ("")
+
+    fn begin() {
+        this.mouse = raylib.get_mouse_position()
+        this.clicked = raylib.is_mouse_button_pressed(.left)
+        this.right_clicked = raylib.is_mouse_button_pressed(.right)
+        this.shift = raylib.is_key_down(.left_shift) || raylib.is_key_down(.right_shift)
+        this.tooltip = ""
+    }
+
+    fn over(x: i32, y: i32, w: i32, h: i32) bool {
+        let mx = this.mouse.x
+        let my = this.mouse.y
+        return mx >= x.to(f32) && mx < (x + w).to(f32) && my >= y.to(f32) && my < (y + h).to(f32)
+    }
+
+    fn button(text: String, x: i32, y: i32, w: i32, h: i32) bool {
+        let hot = this.over(x, y, w, h)
+        raylib.draw_rectangle(x, y, w, h, raylib.Color.rgb(20, 20, 20))
+        raylib.draw_rectangle(x + 2, y + 2, w - 4, h - 4, hot ? raylib.Color.rgb(126, 136, 196) : raylib.Color.rgb(112, 112, 112))
+        raylib.draw_rectangle(x + 2, y + 2, w - 4, 2, hot ? raylib.Color.rgb(176, 186, 240) : raylib.Color.rgb(160, 160, 160))
+        raylib.draw_rectangle(x + 2, y + h - 5, w - 4, 3, hot ? raylib.Color.rgb(84, 92, 150) : raylib.Color.rgb(76, 76, 76))
+        text_centered(text, x + w / 2, y + (h - 20) / 2, 20, hot ? raylib.Color.rgb(255, 255, 160) : raylib.WHITE)
+        return hot && this.clicked
+    }
+
+    fn text_field(text: String, x: i32, y: i32, w: i32, h: i32, blink: bool) {
+        raylib.draw_rectangle(x, y, w, h, raylib.Color.rgb(160, 160, 160))
+        raylib.draw_rectangle(x + 2, y + 2, w - 4, h - 4, raylib.BLACK)
+        let shown = text + (blink ? "_" : "")
+        raylib.draw_text(shown, x + 10, y + (h - 20) / 2, 20, raylib.Color.rgb(224, 224, 224))
+    }
+
+    // The gray window behind the inventory
+    fn panel(x: i32, y: i32, w: i32, h: i32) {
+        raylib.draw_rectangle(x, y, w, h, raylib.Color.rgb(20, 20, 20))
+        raylib.draw_rectangle(x + 2, y + 2, w - 4, h - 4, raylib.Color.rgb(198, 198, 198))
+        raylib.draw_rectangle(x + 2, y + 2, w - 4, 3, raylib.WHITE)
+        raylib.draw_rectangle(x + 2, y + 2, 3, h - 4, raylib.WHITE)
+        raylib.draw_rectangle(x + 2, y + h - 5, w - 4, 3, raylib.Color.rgb(85, 85, 85))
+        raylib.draw_rectangle(x + w - 5, y + 2, 3, h - 4, raylib.Color.rgb(85, 85, 85))
+    }
+
+    // A slot with its stack; returns whether the mouse is over it
+    fn slot(stack: Stack, x: i32, y: i32, size: i32) bool {
+        let hot = this.over(x, y, size, size)
+        raylib.draw_rectangle(x, y, size, size, raylib.Color.rgb(55, 55, 55))
+        raylib.draw_rectangle(x + 2, y + 2, size - 2, size - 2, raylib.WHITE)
+        raylib.draw_rectangle(x + 2, y + 2, size - 4, size - 4, hot ? raylib.Color.rgb(196, 196, 196) : raylib.Color.rgb(139, 139, 139))
+        this.stack(stack, x.to(f32), y.to(f32), size.to(f32))
+        if hot && !is_empty(stack) : this.tooltip = item_name(stack.item)
+        return hot
+    }
+
+    // The picture of a stack with its count and, for a worn tool, how much is left
+    fn stack(stack: Stack, x: f32, y: f32, size: f32) {
+        if is_empty(stack) : return
+        let pad = size * 0.12
+        this.res.draw_item(stack.item, x + pad, y + pad, size - pad * 2)
+        let xi = x.to(i32)
+        let yi = y.to(i32)
+        let si = size.to(i32)
+        if stack.count > 1 {
+            let text = stack.count.to_string()
+            let w = raylib.measure_text(text, 20)
+            raylib.draw_text(text, xi + si - w - 1, yi + si - 19, 20, raylib.Color.rgb(60, 60, 60))
+            raylib.draw_text(text, xi + si - w - 3, yi + si - 21, 20, raylib.WHITE)
+        }
+        let durability = item_durability(stack.item)
+        if durability > 0 && stack.wear > 0 {
+            let left = 1 - stack.wear.to(f32) / durability.to(f32)
+            let bar = ((si - 12).to(f32) * left).to(i32)
+            let color = left > 0.5 ? raylib.Color.rgb(80, 220, 60) : (left > 0.25 ? raylib.Color.rgb(230, 200, 40) : raylib.Color.rgb(220, 50, 40))
+            raylib.draw_rectangle(xi + 6, yi + si - 8, si - 12, 4, raylib.BLACK)
+            raylib.draw_rectangle(xi + 6, yi + si - 8, bar, 2, color)
+        }
+    }
+
+    fn draw_tooltip() {
+        if this.tooltip.bytes == 0 : return
+        let w = raylib.measure_text(this.tooltip, 20)
+        let x = this.mouse.x.to(i32) + 16
+        let y = this.mouse.y.to(i32) - 30
+        raylib.draw_rectangle(x - 6, y - 4, w + 12, 28, raylib.Color.rgba(16, 0, 16, 235))
+        raylib.draw_rectangle_lines(x - 6, y - 4, w + 12, 28, raylib.Color.rgb(80, 0, 200))
+        raylib.draw_text(this.tooltip, x, y, 20, raylib.WHITE)
+    }
+}
+
+fn text_centered(text: String, center_x: i32, y: i32, size: i32, color: raylib.Color) {
+    let w = raylib.measure_text(text, size)
+    raylib.draw_text(text, center_x - w / 2, y, size, color)
+}
+
+fn text_shadowed(text: String, x: i32, y: i32, size: i32, color: raylib.Color) {
+    let offset : i32 = size >= 40 ? 4 : 2
+    raylib.draw_text(text, x + offset, y + offset, size, raylib.Color.rgba(0, 0, 0, 150))
+    raylib.draw_text(text, x, y, size, color)
+}
+
+fn text_centered_shadowed(text: String, center_x: i32, y: i32, size: i32, color: raylib.Color) {
+    let w = raylib.measure_text(text, size)
+    text_shadowed(text, center_x - w / 2, y, size, color)
+}
+
+fn screen_width() i32 {
+    return raylib.get_screen_width()
+}
+
+fn screen_height() i32 {
+    return raylib.get_screen_height()
+}
+
+fn whole(value: f32) String {
+    return math.floor(value).to(int).to_string()
+}

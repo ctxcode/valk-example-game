@@ -1,0 +1,479 @@
+// A world being played: the player, the inventory, animals and items lying around,
+// and what the mouse does to blocks and animals
+
+use raylib
+use valk.math
+
+value REACH (5.0)
+value MOB_LIMIT (40)
+// Seconds between two blocks when breaking or placing repeats
+value REPEAT_DELAY (0.2)
+
+class Game {
+    world: World
+    player: Player
+    creative: bool
+    seed: uint
+    spawn: raylib.Vector3
+    inventory: Inventory (.{})
+    selected: uint (0)
+    mobs: Array[Mob] (.{})
+    drops: Array[Drop] (.{})
+    recipes: Array[Recipe] (all_recipes())
+    // The crafting grid of the open inventory, row by row: 2x2, or 3x3 at a crafting table
+    craft: Array[Stack] (Array[Stack].fill(9, .{}))
+    craft_size: uint (2)
+    // The stack carried by the mouse in the inventory screen
+    cursor: Stack (.{})
+    // What the crosshair is on
+    target: ?RayHit (null)
+    target_mob: ?Mob (null)
+    // Breaking a block: which one, and for how long
+    dig_x: int (0)
+    dig_y: int (0)
+    dig_z: int (0)
+    dig_time: f32 (0)
+    digging: bool (false)
+    break_cooldown: f32 (0)
+    use_cooldown: f32 (0)
+    attack_cooldown: f32 (0)
+    regen: f32 (0)
+    dead: bool (false)
+    death_cause: String ("")
+    // Right click on a crafting table asks for the 3x3 grid
+    wants_table: bool (false)
+    // The mouse button that clicked a menu away is still down: it does nothing in the
+    // world until it is let go
+    mouse_blocked: bool (false)
+
+    static fn new(seed: uint, creative: bool, distance: int) Game {
+        let world = World.new(seed, distance)
+        let x, z = find_land(world.terrain)
+        let height = world.terrain.height(x, z)
+        if height < SEA_LEVEL : height = SEA_LEVEL
+        let spawn = raylib.Vector3{ x: x.to(f32) + 0.5, y: (height + 1).to(f32), z: z.to(f32) + 0.5 }
+        let game = Game{ world: world, player: Player.at(spawn), creative: creative, seed: seed, spawn: spawn }
+        game.player.yaw = 0.8
+        game.player.pitch = -0.2
+        return game
+    }
+
+    fn held() Stack {
+        return this.inventory.get(this.selected)
+    }
+
+    fn unload() {
+        this.world.unload()
+    }
+
+    ////////////////////////////
+    // The world moving on
+    ////////////////////////////
+
+    fn update(dt: f32, input: bool) {
+        let p = this.player.body.position
+        let cx = floor_div(math.floor(p.x).to(int), CHUNK_SIZE)
+        let cz = floor_div(math.floor(p.z).to(int), CHUNK_SIZE)
+        this.world.update(cx, cz, 2)
+        each this.world.fresh as chunk : this.spawn_animals(chunk)
+        this.world.fresh.clear()
+
+        if !this.dead : this.update_player(dt, input)
+        this.update_mobs(dt)
+        this.update_drops(dt)
+        if this.break_cooldown > 0 : this.break_cooldown -= dt
+        if this.use_cooldown > 0 : this.use_cooldown -= dt
+        if this.attack_cooldown > 0 : this.attack_cooldown -= dt
+    }
+
+    fn update_player(dt: f32, input: bool) {
+        let player = this.player
+        if player.hurt > 0 : player.hurt -= dt
+        let fell = player.update(this.world, dt, input)
+        if this.creative : return
+        if fell > 3.5 : this.damage_player(math.floor(fell - 3).to(f32), "fell from a high place")
+        let drowning = player.breathe(this.world, dt)
+        if drowning > 0 : this.damage_player(drowning, "drowned")
+        if player.body.position.y < -8 : this.damage_player(4 * dt, "fell out of the world")
+        // Slowly heals
+        if player.health < MAX_HEALTH.to(f32) && player.health > 0 {
+            this.regen += dt
+            if this.regen >= 4 {
+                this.regen = 0
+                player.health += 1
+            }
+        }
+    }
+
+    fn damage_player(amount: f32, cause: String) {
+        if this.creative || this.dead : return
+        this.player.health -= amount
+        this.player.hurt = 0.35
+        if this.player.health <= 0 {
+            this.player.health = 0
+            this.death_cause = cause
+            this.die()
+        }
+    }
+
+    // Everything carried falls where the player died
+    fn die() {
+        this.dead = true
+        this.return_grid()
+        let at = this.player.body.position + raylib.Vector3{ y: 1 }
+        each this.inventory.slots as stack {
+            if !is_empty(stack) : this.drops.append(Drop.popped(stack, at))
+        }
+        this.inventory.clear()
+    }
+
+    fn respawn() {
+        this.player = Player.at(this.spawn)
+        this.player.yaw = 0.8
+        this.dead = false
+    }
+
+    fn spawn_animals(chunk: Chunk) {
+        let h = hash_position(this.seed * 7 + 3, chunk.cx, chunk.cz)
+        if h % 100 >= 18 || this.mobs.length >= MOB_LIMIT : return
+        let kind = mob_kind_of(((h >> 8) % 4).to(uint))
+        let count = 2 + ((h >> 16) % 3).to(uint)
+        each 0 .. count as i {
+            let spot = hash_position(h, i, 11)
+            let lx = (spot % 16).to(int)
+            let lz = ((spot >> 8) % 16).to(int)
+            let x = chunk.cx * CHUNK_SIZE + lx
+            let z = chunk.cz * CHUNK_SIZE + lz
+            let surface = this.world.terrain.height(x, z)
+            if surface + 2 >= WORLD_HEIGHT : continue
+            if chunk.get(lx, surface, lz) != Block.grass : continue
+            if chunk.get(lx, surface + 1, lz) != Block.air || chunk.get(lx, surface + 2, lz) != Block.air : continue
+            this.mobs.append(Mob.spawn(kind, .{ x: x.to(f32) + 0.5, y: (surface + 1).to(f32), z: z.to(f32) + 0.5 }))
+        }
+    }
+
+    fn update_mobs(dt: f32) {
+        let keep = Array[Mob]{}
+        let limit = ((this.world.radius + 1) * CHUNK_SIZE).to(f32)
+        each this.mobs as mob {
+            let p = mob.body.position
+            let loaded = this.world.chunk(floor_div(math.floor(p.x).to(int), CHUNK_SIZE), floor_div(math.floor(p.z).to(int), CHUNK_SIZE))
+            // Gone with the ground under it, or too far away
+            if !isset(loaded) || p.distance(this.player.body.position) > limit : continue
+            mob.update(this.world, dt)
+            if mob.dying > 0.8 {
+                each mob_loot(mob.kind, raylib.get_random_value(0, 99).to(uint)) as stack {
+                    this.drops.append(Drop.popped(stack, p + raylib.Vector3{ y: 0.5 }))
+                }
+                continue
+            }
+            keep.append(mob)
+        }
+        this.mobs = keep
+    }
+
+    fn update_drops(dt: f32) {
+        let keep = Array[Drop]{}
+        let center = this.player.body.position + raylib.Vector3{ y: 0.9 }
+        each this.drops as drop {
+            drop.update(this.world, dt)
+            if drop.expired() : continue
+            if !this.dead && drop.can_pick_up() && drop.center().distance(center) < 1.8 {
+                drop.stack = this.inventory.add(drop.stack)
+                if is_empty(drop.stack) : continue
+            }
+            keep.append(drop)
+        }
+        this.drops = keep
+    }
+
+    ////////////////////////////
+    // The mouse and keys, while playing
+    ////////////////////////////
+
+    // What the crosshair points at: the nearest of a block and an animal
+    fn aim() {
+        let eye = this.player.eye()
+        let forward = this.player.forward()
+        this.target = this.world.raycast(eye, forward, REACH.to(f32))
+        this.target_mob = null
+        let nearest = REACH.to(f32)
+        let block = this.target
+        if isset(block) : nearest = block.distance
+        each this.mobs as mob {
+            let distance = mob.hit_distance(eye, forward)
+            if distance >= 0 && distance < nearest {
+                nearest = distance
+                this.target_mob = mob
+            }
+        }
+        if isset(this.target_mob) : this.target = null
+    }
+
+    fn handle_input(dt: f32) {
+        let player = this.player
+        each 0 .. HOTBAR_SIZE as i {
+            if raylib.is_key_pressed(key_for_slot(i.to(uint))) : this.selected = i.to(uint)
+        }
+        let wheel = raylib.get_mouse_wheel_move()
+        if wheel > 0 : this.selected = this.selected == 0 ? HOTBAR_SIZE - 1 : this.selected - 1
+        if wheel < 0 : this.selected = (this.selected + 1) % HOTBAR_SIZE
+        if this.creative && raylib.is_key_pressed(.f) {
+            player.flying = !player.flying
+            player.body.velocity = .{}
+        }
+        if raylib.is_key_pressed(.q) : this.drop_held()
+
+        this.aim()
+        let left = raylib.is_mouse_button_down(.left)
+        let right = raylib.is_mouse_button_down(.right)
+        if this.mouse_blocked {
+            if left || right : return
+            this.mouse_blocked = false
+        }
+
+        // Hitting an animal
+        let mob = this.target_mob
+        if isset(mob) {
+            this.digging = false
+            if raylib.is_mouse_button_pressed(.left) && this.attack_cooldown <= 0 {
+                mob.damage(attack_damage(this.held().item), player.body.position)
+                this.attack_cooldown = 0.35
+                if !this.creative : this.inventory.wear(this.selected, item_tool(this.held().item) == Tool.sword ? 1 : 2)
+            }
+        }
+
+        let target = this.target
+        if left && isset(target) {
+            this.dig(target, dt)
+        } else {
+            this.digging = false
+            if !left : this.break_cooldown = 0
+        }
+        if right && this.use_cooldown <= 0 : this.use(target)
+        if !right : this.use_cooldown = 0
+    }
+
+    // Holding the button on a block: it breaks once dug long enough for the tool in hand
+    fn dig(target: RayHit, dt: f32) {
+        if this.break_cooldown > 0 : return
+        if this.creative {
+            this.break_block(target.x, target.y, target.z)
+            this.break_cooldown = REPEAT_DELAY.to(f32)
+            return
+        }
+        if !this.digging || target.x != this.dig_x || target.y != this.dig_y || target.z != this.dig_z {
+            this.digging = true
+            this.dig_x = target.x
+            this.dig_y = target.y
+            this.dig_z = target.z
+            this.dig_time = 0
+        }
+        let needed = break_time(target.block, this.held().item)
+        if needed < 0 : return
+        this.dig_time += dt
+        if this.dig_time >= needed {
+            this.break_block(target.x, target.y, target.z)
+            this.digging = false
+            this.break_cooldown = 0.15
+        }
+    }
+
+    // 0 .. 1: how far the block being dug is
+    fn dig_progress() f32 {
+        if !this.digging : return 0
+        let target = this.target ?! return 0
+        let needed = break_time(target.block, this.held().item)
+        if needed <= 0 : return 0
+        let progress = this.dig_time / needed
+        return progress > 1 ? 1 : progress
+    }
+
+    fn break_block(x: int, y: int, z: int) {
+        let block = this.world.block(x, y, z)
+        this.world.set_block(x, y, z, Block.air)
+        if this.creative : return
+        let held = this.held().item
+        if can_harvest(block, held) {
+            let item = block_drop(block, raylib.get_random_value(0, 99).to(uint))
+            if item != Item.none : this.drops.append(Drop.popped(stack_of(item, 1), .{ x: x.to(f32) + 0.5, y: y.to(f32) + 0.4, z: z.to(f32) + 0.5 }))
+        }
+        if item_tool(held) != Tool.none : this.inventory.wear(this.selected, item_tool(held) == Tool.sword ? 2 : 1)
+    }
+
+    // Right click: open a crafting table, eat, or place a block
+    fn use(target: ?RayHit) {
+        let held = this.held()
+        if isset(target) && target.block == Block.crafting_table && !raylib.is_key_down(.left_shift) {
+            this.wants_table = true
+            this.use_cooldown = 0.3
+            return
+        }
+        let food = food_value(held.item)
+        if food > 0 && !this.creative && this.player.health < MAX_HEALTH.to(f32) {
+            this.player.health = this.player.health + food > MAX_HEALTH.to(f32) ? MAX_HEALTH.to(f32) : this.player.health + food
+            this.inventory.take_one(this.selected)
+            this.use_cooldown = 0.5
+            return
+        }
+        let block = item_block(held.item)
+        if block == Block.air || !isset(target) : return
+        let x = target.x + target.normal_x
+        let y = target.y + target.normal_y
+        let z = target.z + target.normal_z
+        if y < 0 || y >= WORLD_HEIGHT : return
+        let there = this.world.block(x, y, z)
+        if there != Block.air && there != Block.water : return
+        if this.player.body.overlaps(x, y, z) : return
+        each this.mobs as mob {
+            if mob.alive() && mob.body.overlaps(x, y, z) : return
+        }
+        this.world.set_block(x, y, z, block)
+        if !this.creative : this.inventory.take_one(this.selected)
+        this.use_cooldown = REPEAT_DELAY.to(f32)
+    }
+
+    // Throws one of the held item ahead
+    fn drop_held() {
+        let held = this.held()
+        if is_empty(held) : return
+        let one = held
+        one.count = 1
+        this.throw_stack(one)
+        this.inventory.take_one(this.selected)
+    }
+
+    fn throw_stack(stack: Stack) {
+        if is_empty(stack) : return
+        let eye = this.player.eye() - raylib.Vector3{ y: 0.3 }
+        let drop = Drop.at(stack, eye, this.player.forward().scale(5) + raylib.Vector3{ y: 1.5 })
+        drop.age = -1
+        this.drops.append(drop)
+    }
+
+    ////////////////////////////
+    // Crafting
+    ////////////////////////////
+
+    fn craft_recipe() ?Recipe {
+        return craft_result(this.recipes, this.craft, this.craft_size)
+    }
+
+    // Takes the result of the grid, into the mouse, or (`all`) into the inventory as often
+    // as the ingredients allow
+    fn take_craft(all: bool) {
+        let rounds = 0
+        while rounds < 64 {
+            rounds++
+            let recipe = this.craft_recipe() ?! return
+            let made = stack_of(recipe.result, recipe.count)
+            if all {
+                consume_grid(this.craft)
+                let left = this.inventory.add(made)
+                if !is_empty(left) {
+                    this.throw_stack(left)
+                    return
+                }
+                continue
+            }
+            if is_empty(this.cursor) {
+                this.cursor = made
+            } else if this.cursor.item == made.item && this.cursor.count + made.count <= max_stack(made.item) {
+                this.cursor.count += made.count
+            } else {
+                return
+            }
+            consume_grid(this.craft)
+            return
+        }
+    }
+
+    // Closing the inventory: the grid and the mouse give their items back
+    fn return_grid() {
+        each this.craft as stack, i {
+            this.throw_stack(this.inventory.add(stack))
+            this.craft[i] = Stack{}
+        }
+        this.throw_stack(this.inventory.add(this.cursor))
+        this.cursor = Stack{}
+    }
+
+    ////////////////////////////
+    // Drawing
+    ////////////////////////////
+
+    fn draw(res: Resources, camera: raylib.Camera3D) {
+        res.set_tint(raylib.WHITE)
+        this.world.draw(res.material, camera)
+
+        let forward = (camera.target - camera.position).normalize()
+        each this.mobs as mob {
+            // Only the ones in front of the camera and not too far
+            let to_mob = mob.body.position - camera.position
+            if to_mob.length_sqr() > 64 * 64 || to_mob.dot(forward) < -2 : continue
+            let model = res.mob_models[mob_kind_index(mob.kind)]
+            let red = mob.hurt > 0
+            if red : res.set_tint(raylib.Color.rgb(255, 110, 110))
+            each model.parts as part : raylib.draw_mesh(part.mesh, res.material, mob_part_transform(mob, part))
+            if red : res.set_tint(raylib.WHITE)
+        }
+
+        each this.drops as drop {
+            let center = drop.center()
+            let block = item_block(drop.stack.item)
+            if block != Block.air {
+                let size = DROP_SIZE.to(f32)
+                let m = raylib.Matrix.scaling(size, size, size).multiply(raylib.Matrix.rotate_y(drop.age * 1.5)).multiply(raylib.Matrix.translate(center.x, center.y, center.z))
+                raylib.draw_mesh(res.cube(block), res.material, m)
+            } else {
+                raylib.draw_billboard_rec(camera, res.sprites, sprite_rectangle(item_sprite(drop.stack.item)), center, .{ x: 0.4, y: 0.4 }, raylib.WHITE)
+            }
+        }
+
+        let target = this.target
+        if isset(target) {
+            let progress = this.dig_progress()
+            if progress > 0 {
+                let stage = (progress * CRACK_STAGES.to(f32)).to(uint)
+                if stage >= CRACK_STAGES : stage = CRACK_STAGES - 1
+                raylib.draw_mesh(res.cracks[stage], res.material, raylib.Matrix.translate(target.x.to(f32), target.y.to(f32), target.z.to(f32)))
+            }
+            let center = raylib.Vector3{ x: target.x.to(f32) + 0.5, y: target.y.to(f32) + 0.5, z: target.z.to(f32) + 0.5 }
+            raylib.draw_cube_wires(center, 1.01, 1.01, 1.01, raylib.Color.rgba(0, 0, 0, 200))
+        }
+    }
+}
+
+// The dry column nearest the origin, walking out in growing squares
+fn find_land(terrain: Terrain) (int, int) {
+    let radius = 0
+    while radius < 400 {
+        let x = -radius
+        while x <= radius {
+            let z = -radius
+            while z <= radius {
+                if (x.abs() == radius || z.abs() == radius) && terrain.height(x, z) > SEA_LEVEL + 2 {
+                    if terrain.tree_at(x, z, terrain.height(x, z)) == 0 : return (x, z)
+                }
+                z += 4
+            }
+            x += 4
+        }
+        radius += 4
+    }
+    return (0, 0)
+}
+
+fn key_for_slot(slot: uint) raylib.KeyboardKey {
+    match slot {
+        0 => return .one
+        1 => return .two
+        2 => return .three
+        3 => return .four
+        4 => return .five
+        5 => return .six
+        6 => return .seven
+        7 => return .eight
+        default => return .nine
+    }
+}

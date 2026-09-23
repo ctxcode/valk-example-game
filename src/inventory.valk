@@ -1,0 +1,87 @@
+// The player's 36 slots: 9 in the hotbar (0 .. 8), 27 above them
+
+value HOTBAR_SIZE (9)
+value INVENTORY_SIZE (36)
+
+class Inventory {
+    slots: Array[Stack] (Array[Stack].fill(INVENTORY_SIZE, .{}))
+
+    fn get(index: uint) Stack {
+        return this.slots[index]
+    }
+
+    fn set(index: uint, stack: Stack) {
+        this.slots[index] = is_empty(stack) ? Stack{} : stack
+    }
+
+    // Adds as much as fits, topping up stacks of the same item first, hotbar first.
+    // Returns what did not fit.
+    fn add(stack: Stack) Stack {
+        return this.add_between(stack, 0, INVENTORY_SIZE)
+    }
+
+    // The same, into slots `start` up to `end` only
+    fn add_between(stack: Stack, start: uint, end: uint) Stack {
+        let left = stack
+        if is_empty(left) : return Stack{}
+        let limit = max_stack(left.item)
+        let i = start
+        while i < end {
+            let slot = this.slots[i]
+            if slot.item == left.item && slot.count < limit && !is_empty(slot) {
+                let room = limit - slot.count
+                let moved = left.count < room ? left.count : room
+                slot.count += moved
+                left.count -= moved
+                this.slots[i] = slot
+                if left.count == 0 : return Stack{}
+            }
+            i++
+        }
+        i = start
+        while i < end {
+            if is_empty(this.slots[i]) {
+                let moved = left.count < limit ? left.count : limit
+                let placed = left
+                placed.count = moved
+                this.slots[i] = placed
+                left.count -= moved
+                if left.count == 0 : return Stack{}
+            }
+            i++
+        }
+        return left
+    }
+
+    // Takes one of the item in a slot, e.g. a block that is placed
+    fn take_one(index: uint) {
+        let slot = this.slots[index]
+        if slot.count <= 1 {
+            this.slots[index] = Stack{}
+            return
+        }
+        slot.count--
+        this.slots[index] = slot
+    }
+
+    // Wears the tool in a slot; it breaks when it is used up
+    fn wear(index: uint, amount: u16) {
+        let slot = this.slots[index]
+        let durability = item_durability(slot.item)
+        if durability == 0 : return
+        slot.wear += amount
+        this.slots[index] = slot.wear >= durability ? Stack{} : slot
+    }
+
+    fn count(item: Item) uint {
+        let total : uint = 0
+        each this.slots as slot {
+            if slot.item == item : total += slot.count.to(uint)
+        }
+        return total
+    }
+
+    fn clear() {
+        each 0 .. INVENTORY_SIZE as i : this.slots[i.to(uint)] = Stack{}
+    }
+}

@@ -1,0 +1,317 @@
+// Animals: pigs, cows, sheep and chickens that wander around, flee when hit, and drop
+// loot when killed
+
+use raylib
+use valk.math
+
+enum MobKind : u8 {
+    pig
+    cow
+    sheep
+    chicken
+}
+
+fn mob_kind_index(kind: MobKind) uint {
+    match kind {
+        MobKind.pig => return 0
+        MobKind.cow => return 1
+        MobKind.sheep => return 2
+        MobKind.chicken => return 3
+    }
+}
+
+fn mob_kind_of(index: uint) MobKind {
+    if index == 1 : return MobKind.cow
+    if index == 2 : return MobKind.sheep
+    if index == 3 : return MobKind.chicken
+    return MobKind.pig
+}
+
+fn mob_health(kind: MobKind) f32 {
+    if kind == MobKind.chicken : return 4
+    if kind == MobKind.sheep : return 8
+    return 10
+}
+
+fn mob_half_width(kind: MobKind) f32 {
+    return kind == MobKind.chicken ? 0.2 : 0.45
+}
+
+fn mob_height(kind: MobKind) f32 {
+    if kind == MobKind.cow : return 1.4
+    if kind == MobKind.sheep : return 1.3
+    if kind == MobKind.chicken : return 0.7
+    return 0.9
+}
+
+fn mob_speed(kind: MobKind) f32 {
+    if kind == MobKind.cow : return 1.0
+    if kind == MobKind.chicken : return 1.4
+    return 1.2
+}
+
+fn random_unit() f32 {
+    return raylib.get_random_value(0, 10000).to(f32) / 10000
+}
+
+// What a killed animal leaves; `roll` picks the amounts (0 .. 99)
+fn mob_loot(kind: MobKind, roll: uint) Array[Stack] {
+    let small = (1 + roll % 3).to(u8)
+    let extra = (roll / 34).to(u8)
+    match kind {
+        MobKind.pig => return Array[Stack]{ stack_of(Item.porkchop, small) }
+        MobKind.cow => {
+            let out = Array[Stack]{ stack_of(Item.beef, small) }
+            if extra > 0 : out.append(stack_of(Item.leather, extra))
+            return out
+        }
+        MobKind.sheep => return Array[Stack]{ stack_of(Item.wool, 1), stack_of(Item.mutton, 1 + (roll % 2).to(u8)) }
+        MobKind.chicken => {
+            let out = Array[Stack]{ stack_of(Item.chicken, 1) }
+            if extra > 0 : out.append(stack_of(Item.feather, extra))
+            return out
+        }
+    }
+}
+
+class Mob {
+    kind: MobKind
+    body: Body
+    yaw: f32 (0)
+    // The way it wants to face
+    heading: f32 (0)
+    health: f32
+    walking: bool (false)
+    // Seconds until it picks something else to do
+    timer: f32 (0)
+    // Seconds left running away
+    panic: f32 (0)
+    // Seconds left of the red flash after a hit
+    hurt: f32 (0)
+    // Seconds since it died; 0 while alive
+    dying: f32 (0)
+    // Leg swing
+    stride: f32 (0)
+
+    static fn spawn(kind: MobKind, position: raylib.Vector3) Mob {
+        let body = Body{ position: position, half: mob_half_width(kind), height: mob_height(kind) }
+        let yaw = random_unit() * 6.28
+        return Mob{ kind: kind, body: body, health: mob_health(kind), yaw: yaw, heading: yaw, timer: random_unit() * 3 }
+    }
+
+    fn alive() bool {
+        return this.dying == 0
+    }
+
+    // Takes a hit from the direction `from` (a point); returns whether that killed it
+    fn damage(amount: f32, from: raylib.Vector3) bool {
+        if !this.alive() : return false
+        this.health -= amount
+        this.hurt = 0.35
+        this.panic = 5
+        // Knocked away from the hit
+        let away = raylib.Vector3{ x: this.body.position.x - from.x, z: this.body.position.z - from.z }.normalize()
+        this.body.velocity.x = away.x * 5
+        this.body.velocity.z = away.z * 5
+        this.body.velocity.y = 5
+        this.heading = math.atan2(away.z, away.x).to(f32)
+        if this.health <= 0 {
+            this.dying = 0.001
+            return true
+        }
+        return false
+    }
+
+    fn update(world: World, dt: f32) {
+        if this.hurt > 0 : this.hurt -= dt
+        if !this.alive() {
+            this.dying += dt
+            this.body.velocity.x *= 0.9
+            this.body.velocity.z *= 0.9
+            this.body.velocity.y -= GRAVITY.to(f32) * dt
+            this.body.move(world, dt)
+            return
+        }
+
+        this.timer -= dt
+        if this.panic > 0 {
+            this.panic -= dt
+            this.walking = true
+            if this.timer <= 0 {
+                this.heading += (random_unit() - 0.5) * 2.5
+                this.timer = 0.6 + random_unit()
+            }
+        } else if this.timer <= 0 {
+            this.walking = random_unit() < 0.6
+            if this.walking : this.heading = random_unit() * 6.28
+            this.timer = this.walking ? 1.5 + random_unit() * 3 : 2 + random_unit() * 5
+        }
+
+        // Turn towards the heading, the short way round
+        let turn = this.heading - this.yaw
+        while turn > 3.1416 : turn -= 6.2832
+        while turn < -3.1416 : turn += 6.2832
+        let step = 6 * dt
+        this.yaw += turn > step ? step : (turn < -step ? -step : turn)
+
+        let in_water = this.body.block_at(world, 0.3) == Block.water
+        let speed = this.walking ? mob_speed(this.kind) * (this.panic > 0 ? 2.4 : 1) : 0
+        let wish_x = math.cos(this.yaw).to(f32) * speed
+        let wish_z = math.sin(this.yaw).to(f32) * speed
+        // Turn around at water, unless running for its life
+        if this.walking && !in_water && this.panic <= 0 {
+            let ahead_x = math.floor(this.body.position.x + wish_x.to(float) * 0.5).to(int)
+            let ahead_z = math.floor(this.body.position.z + wish_z.to(float) * 0.5).to(int)
+            let feet = math.floor(this.body.position.y).to(int)
+            if world.block(ahead_x, feet, ahead_z) == Block.water || world.block(ahead_x, feet - 1, ahead_z) == Block.water {
+                this.heading += 3.1416
+                this.timer = 1
+            }
+        }
+        let grip : f32 = this.body.on_ground ? 10 : 2
+        let blend : f32 = grip * dt > 1 ? 1 : grip * dt
+        this.body.velocity.x += (wish_x - this.body.velocity.x) * blend
+        this.body.velocity.z += (wish_z - this.body.velocity.z) * blend
+        if in_water {
+            // Animals float
+            this.body.velocity.y += (1.5 - this.body.velocity.y) * blend
+        } else {
+            this.body.velocity.y -= GRAVITY.to(f32) * dt
+        }
+        let was_blocked = this.body.blocked
+        this.body.move(world, dt)
+        // Hop up a block in the way
+        if (this.body.blocked || was_blocked) && this.body.on_ground && this.walking : this.body.velocity.y = 7.5
+
+        let moving = math.hypot(this.body.velocity.x, this.body.velocity.z).to(f32)
+        this.stride += moving * dt * 5
+    }
+
+    // Where a ray from `origin` along `direction` enters it, or -1
+    fn hit_distance(origin: raylib.Vector3, direction: raylib.Vector3) f32 {
+        if !this.alive() : return -1
+        let hit = raylib.get_ray_collision_box(raylib.Ray{ position: origin, direction: direction }, this.body.bounds())
+        return hit.hit ? hit.distance : -1
+    }
+}
+
+// One box of an animal: its mesh around a pivot, in the animal's own space (feet at
+// the origin, facing +x)
+class MobPart {
+    mesh: raylib.Mesh
+    pivot: raylib.Vector3
+    // Legs swing: +1 or -1, 0 for parts that do not
+    swing: f32 (0)
+}
+
+class MobModel {
+    parts: Array[MobPart] (.{})
+    mesher: Mesher
+    // The boxes that never move against the body, drawn as one mesh
+    still: raylib.MeshBuilder (.{ normals: false })
+
+    // A box from `min` to `max`; one that swings (a leg) turns about `pivot`
+    fn part(min: raylib.Vector3, max: raylib.Vector3, color: raylib.Color, pivot: raylib.Vector3 (.{}), swing: f32 (0)) {
+        if swing == 0 {
+            this.mesher.add_box(this.still, min, max, color, Block.air, TILE_WHITE)
+            return
+        }
+        let builder = raylib.MeshBuilder{ normals: false }
+        this.mesher.add_box(builder, min - pivot, max - pivot, color, Block.air, TILE_WHITE)
+        this.parts.append(MobPart{ mesh: builder.build(true, false, false), pivot: pivot, swing: swing })
+    }
+
+    fn finish() MobModel {
+        this.parts.append(MobPart{ mesh: this.still.build(true, false, false), pivot: .{} })
+        return this
+    }
+
+    // Four legs of `width` and `height`, `dx` and `dz` from the middle
+    fn legs(dx: f32, dz: f32, width: f32, height: f32, color: raylib.Color) {
+        let w = width / 2
+        let signs = Array[f32]{ 1, -1 }
+        each signs as sx, i {
+            each signs as sz, j {
+                let pivot = raylib.Vector3{ x: dx * sx, y: height, z: dz * sz }
+                let swing : f32 = (i + j) % 2 == 0 ? 1 : -1
+                this.part(pivot + raylib.Vector3{ x: -w, y: -height, z: -w }, pivot + raylib.Vector3{ x: w, z: w }, color, pivot, swing)
+            }
+        }
+    }
+
+    // Two eyes on the front of a head whose front is at `x`
+    fn eyes(x: f32, y: f32, apart: f32) {
+        let black = raylib.Color.rgb(24, 24, 24)
+        let white = raylib.Color.rgb(240, 240, 240)
+        each Array[f32]{ 1, -1 } as side {
+            let z = apart * side
+            this.part(.{ x: x, y: y, z: z - 0.05 }, .{ x: x + 0.01, y: y + 0.08, z: z + 0.05 }, white)
+            this.part(.{ x: x + 0.001, y: y, z: side > 0 ? z - 0.05 : z }, .{ x: x + 0.011, y: y + 0.08, z: side > 0 ? z : z + 0.05 }, black)
+        }
+    }
+
+    fn unload() {
+        each this.parts as part : raylib.unload_mesh(part.mesh)
+    }
+}
+
+fn build_mob_models(mesher: Mesher) Array[MobModel] {
+    let pig = MobModel{ mesher: mesher }
+    let pink = raylib.Color.rgb(240, 164, 164)
+    pig.part(.{ x: -0.5, y: 0.35, z: -0.3 }, .{ x: 0.5, y: 0.85, z: 0.3 }, pink)
+    pig.part(.{ x: 0.45, y: 0.45, z: -0.24 }, .{ x: 0.92, y: 0.92, z: 0.24 }, pink)
+    pig.part(.{ x: 0.92, y: 0.5, z: -0.13 }, .{ x: 1.0, y: 0.66, z: 0.13 }, raylib.Color.rgb(222, 120, 132))
+    pig.eyes(0.92, 0.72, 0.13)
+    pig.legs(0.3, 0.18, 0.2, 0.35, pink)
+
+    let cow = MobModel{ mesher: mesher }
+    let brown = raylib.Color.rgb(86, 58, 38)
+    let patch = raylib.Color.rgb(230, 230, 225)
+    cow.part(.{ x: -0.62, y: 0.6, z: -0.36 }, .{ x: 0.62, y: 1.2, z: 0.36 }, brown)
+    cow.part(.{ x: -0.3, y: 0.8, z: 0.361 }, .{ x: 0.1, y: 1.1, z: 0.37 }, patch)
+    cow.part(.{ x: 0.1, y: 0.7, z: -0.37 }, .{ x: 0.45, y: 1.0, z: -0.361 }, patch)
+    cow.part(.{ x: -0.4, y: 1.2, z: -0.2 }, .{ x: 0.0, y: 1.201, z: 0.1 }, patch)
+    cow.part(.{ x: 0.55, y: 0.88, z: -0.26 }, .{ x: 1.0, y: 1.34, z: 0.26 }, brown)
+    cow.part(.{ x: 1.0, y: 0.88, z: -0.2 }, .{ x: 1.08, y: 1.04, z: 0.2 }, raylib.Color.rgb(200, 176, 164))
+    cow.part(.{ x: 0.72, y: 1.34, z: 0.16 }, .{ x: 0.8, y: 1.46, z: 0.3 }, patch)
+    cow.part(.{ x: 0.72, y: 1.34, z: -0.3 }, .{ x: 0.8, y: 1.46, z: -0.16 }, patch)
+    cow.eyes(1.0, 1.14, 0.15)
+    cow.legs(0.42, 0.22, 0.24, 0.6, brown)
+
+    let sheep = MobModel{ mesher: mesher }
+    let wool = raylib.Color.rgb(236, 236, 236)
+    let face = raylib.Color.rgb(196, 172, 150)
+    sheep.part(.{ x: -0.56, y: 0.55, z: -0.4 }, .{ x: 0.56, y: 1.15, z: 0.4 }, wool)
+    sheep.part(.{ x: 0.5, y: 0.8, z: -0.2 }, .{ x: 0.9, y: 1.18, z: 0.2 }, face)
+    sheep.part(.{ x: 0.48, y: 1.08, z: -0.23 }, .{ x: 0.82, y: 1.26, z: 0.23 }, wool)
+    sheep.eyes(0.9, 1.0, 0.12)
+    sheep.legs(0.36, 0.22, 0.2, 0.55, face)
+
+    let chicken = MobModel{ mesher: mesher }
+    let feathers = raylib.Color.rgb(246, 246, 246)
+    chicken.part(.{ x: -0.25, y: 0.28, z: -0.18 }, .{ x: 0.18, y: 0.62, z: 0.18 }, feathers)
+    chicken.part(.{ x: -0.18, y: 0.32, z: 0.18 }, .{ x: 0.12, y: 0.56, z: 0.23 }, raylib.Color.rgb(226, 226, 226))
+    chicken.part(.{ x: -0.18, y: 0.32, z: -0.23 }, .{ x: 0.12, y: 0.56, z: -0.18 }, raylib.Color.rgb(226, 226, 226))
+    chicken.part(.{ x: 0.08, y: 0.55, z: -0.11 }, .{ x: 0.32, y: 0.9, z: 0.11 }, feathers)
+    chicken.part(.{ x: 0.32, y: 0.72, z: -0.07 }, .{ x: 0.44, y: 0.8, z: 0.07 }, raylib.Color.rgb(240, 168, 40))
+    chicken.part(.{ x: 0.32, y: 0.62, z: -0.04 }, .{ x: 0.38, y: 0.72, z: 0.04 }, raylib.Color.rgb(210, 40, 40))
+    chicken.eyes(0.32, 0.8, 0.07)
+    let yellow = raylib.Color.rgb(236, 180, 40)
+    chicken.part(.{ x: -0.02, y: 0, z: 0.05 }, .{ x: 0.04, y: 0.28, z: 0.11 }, yellow, .{ x: 0.01, y: 0.28, z: 0.08 }, 1)
+    chicken.part(.{ x: -0.02, y: 0, z: -0.11 }, .{ x: 0.04, y: 0.28, z: -0.05 }, yellow, .{ x: 0.01, y: 0.28, z: -0.08 }, -1)
+
+    return Array[MobModel]{ pig.finish(), cow.finish(), sheep.finish(), chicken.finish() }
+}
+
+// The transform of one part: legs swing about their pivot, the whole animal turns to its
+// yaw, tips over when dead, and stands at its position
+fn mob_part_transform(mob: Mob, part: MobPart) raylib.Matrix {
+    let swing = math.sin(mob.stride).to(f32) * 0.7 * part.swing
+    let m = raylib.Matrix.rotate_z(swing).multiply(raylib.Matrix.translate(part.pivot.x, part.pivot.y, part.pivot.z))
+    if !mob.alive() {
+        let fall = mob.dying * 4
+        m = m.multiply(raylib.Matrix.rotate_x(fall > 1.57 ? 1.57 : fall))
+    }
+    let p = mob.body.position
+    return m.multiply(raylib.Matrix.rotate_y(-mob.yaw)).multiply(raylib.Matrix.translate(p.x, p.y, p.z))
+}

@@ -1,0 +1,124 @@
+// Everything loaded once at startup and shared by the menus and the game
+
+use raylib
+
+value ICON_SIZE (64)
+
+class Resources {
+    atlas: raylib.Texture
+    sprites: raylib.Texture
+    shader: raylib.Shader
+    material: raylib.Material
+    fog_color_location: i32
+    fog_start_location: i32
+    fog_end_location: i32
+    view_location: i32
+    tint_location: i32
+    mesher: Mesher
+    // A unit cube around the origin per block, by the block's number: for drops and icons
+    cubes: Array[raylib.Mesh]
+    // A cube a little larger than a block, with cracks, per stage of breaking
+    cracks: Array[raylib.Mesh]
+    // Inventory icons of the block items, by the item's number
+    icons: Array[raylib.RenderTexture]
+    mob_models: Array[MobModel]
+
+    static fn load() Resources {
+        let atlas = build_atlas()
+        let shader = raylib.load_shader_from_memory(BLOCK_VERTEX_SHADER, BLOCK_FRAGMENT_SHADER)
+        let material = raylib.load_material_default()
+        material.shader = shader
+        material.set_texture(.albedo, atlas)
+        let mesher = Mesher{}
+        let res = Resources{
+            atlas: atlas
+            sprites: build_sprites()
+            shader: shader
+            material: material
+            fog_color_location: shader.location("fogColor")
+            fog_start_location: shader.location("fogStart")
+            fog_end_location: shader.location("fogEnd")
+            view_location: shader.location("viewPos")
+            tint_location: shader.location("tint")
+            mesher: mesher
+            cubes: Array[raylib.Mesh].fill(32, .{})
+            cracks: Array[raylib.Mesh]{}
+            icons: Array[raylib.RenderTexture].fill(64, .{})
+            mob_models: build_mob_models(mesher)
+        }
+        res.set_tint(raylib.WHITE)
+        res.set_fog(raylib.BLACK, 1000, 2000)
+
+        each all_items() as item {
+            let block = item_block(item)
+            if block == Block.air : continue
+            let builder = raylib.MeshBuilder{ normals: false }
+            mesher.add_box(builder, .{ x: -0.5, y: -0.5, z: -0.5 }, .{ x: 0.5, y: 0.5, z: 0.5 }, raylib.WHITE, block, 0)
+            res.cubes[block.to(uint)] = builder.build(true, false, false)
+        }
+        each 0 .. CRACK_STAGES as stage {
+            let builder = raylib.MeshBuilder{ normals: false }
+            mesher.add_box(builder, .{ x: -0.002, y: -0.002, z: -0.002 }, .{ x: 1.002, y: 1.002, z: 1.002 }, raylib.WHITE, Block.air, TILE_CRACK + stage.to(uint))
+            res.cracks.append(builder.build(true, false, false))
+        }
+        res.render_icons()
+        return res
+    }
+
+    fn set_tint(color: raylib.Color) {
+        this.shader.set_color(this.tint_location, color)
+    }
+
+    fn set_fog(color: raylib.Color, start: f32, end: f32) {
+        this.shader.set_color(this.fog_color_location, color)
+        this.shader.set_float(this.fog_start_location, start)
+        this.shader.set_float(this.fog_end_location, end)
+    }
+
+    fn cube(block: Block) raylib.Mesh {
+        return this.cubes[block.to(uint)]
+    }
+
+    // A block item's icon: its cube seen from above, the way Minecraft shows them
+    fn render_icons() {
+        let camera = raylib.Camera3D{
+            position: .{ x: 2, y: 1.64, z: 2 }
+            up: .{ y: 1 }
+            fovy: 1.72
+            projection: raylib.CameraProjection.orthographic.to(i32)
+        }
+        this.shader.set_vec3(this.view_location, camera.position)
+        each all_items() as item {
+            let block = item_block(item)
+            if block == Block.air : continue
+            let target = raylib.load_render_texture(ICON_SIZE.to(i32), ICON_SIZE.to(i32))
+            raylib.begin_texture_mode(target)
+            raylib.clear_background(raylib.BLANK)
+            raylib.begin_mode_3d(camera)
+            raylib.draw_mesh(this.cube(block), this.material, raylib.Matrix.identity())
+            raylib.end_mode_3d()
+            raylib.end_texture_mode()
+            this.icons[item.to(uint)] = target
+        }
+    }
+
+    // Draws an item's picture in a square
+    fn draw_item(item: Item, x: f32, y: f32, size: f32) {
+        if item == Item.none : return
+        let dest = raylib.Rectangle{ x: x, y: y, width: size, height: size }
+        if item_block(item) != Block.air {
+            let icon = this.icons[item.to(uint)]
+            // Render textures are upside down
+            let source = raylib.Rectangle{ x: 0, y: 0, width: ICON_SIZE.to(f32), height: -ICON_SIZE.to(f32) }
+            raylib.draw_texture_pro(icon.texture, source, dest, .{}, 0, raylib.WHITE)
+            return
+        }
+        raylib.draw_texture_pro(this.sprites, sprite_rectangle(item_sprite(item)), dest, .{}, 0, raylib.WHITE)
+    }
+
+    fn draw_sprite(sprite: uint, x: f32, y: f32, width: f32, height: f32, pixels_w: f32, pixels_h: f32) {
+        let r = sprite_rectangle(sprite)
+        let source = raylib.Rectangle{ x: r.x, y: r.y, width: pixels_w, height: pixels_h }
+        raylib.draw_texture_pro(this.sprites, source, .{ x: x, y: y, width: width, height: height }, .{}, 0, raylib.WHITE)
+    }
+}

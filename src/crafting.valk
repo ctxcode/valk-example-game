@@ -1,0 +1,104 @@
+// Crafting recipes: a shape of items in the 2x2 or 3x3 grid makes a result.
+// A shape can sit anywhere in the grid, and mirrored.
+
+class Recipe {
+    width: uint
+    height: uint
+    // Row by row; Item.none is an empty cell
+    cells: Array[Item]
+    result: Item
+    count: u8
+}
+
+// A recipe from rows of text: `a` and `b` stand for the two ingredients, a space for nothing
+fn shaped(rows: Array[String], a: Item, b: Item, result: Item, count: u8) Recipe {
+    let cells = Array[Item]{}
+    each rows as row {
+        each row as ch {
+            if ch == 'a' : cells.append(a)
+            else if ch == 'b' : cells.append(b)
+            else : cells.append(Item.none)
+        }
+    }
+    return Recipe{ width: rows[0].bytes, height: rows.length, cells: cells, result: result, count: count }
+}
+
+fn all_recipes() Array[Recipe] {
+    let list = Array[Recipe]{
+        shaped(Array[String]{ "a" }, Item.log, Item.none, Item.planks, 4)
+        shaped(Array[String]{ "a", "a" }, Item.planks, Item.none, Item.stick, 4)
+        shaped(Array[String]{ "aa", "aa" }, Item.planks, Item.none, Item.crafting_table, 1)
+    }
+    let materials = Array[Item]{ Item.planks, Item.cobblestone, Item.iron_ingot }
+    let pickaxes = Array[Item]{ Item.wooden_pickaxe, Item.stone_pickaxe, Item.iron_pickaxe }
+    let axes = Array[Item]{ Item.wooden_axe, Item.stone_axe, Item.iron_axe }
+    let shovels = Array[Item]{ Item.wooden_shovel, Item.stone_shovel, Item.iron_shovel }
+    let swords = Array[Item]{ Item.wooden_sword, Item.stone_sword, Item.iron_sword }
+    each materials as m, i {
+        list.append(shaped(Array[String]{ "aaa", " b ", " b " }, m, Item.stick, pickaxes[i], 1))
+        list.append(shaped(Array[String]{ "aa", "ab", " b" }, m, Item.stick, axes[i], 1))
+        list.append(shaped(Array[String]{ "a", "b", "b" }, m, Item.stick, shovels[i], 1))
+        list.append(shaped(Array[String]{ "a", "a", "b" }, m, Item.stick, swords[i], 1))
+    }
+    return list
+}
+
+// What the grid (`size` x `size`, row by row) makes, or null
+fn craft_result(recipes: Array[Recipe], grid: Array[Stack], size: uint) ?Recipe {
+    // The box around the filled cells
+    let min_x = size
+    let min_y = size
+    let max_x : uint = 0
+    let max_y : uint = 0
+    let filled = false
+    each 0 .. size as y {
+        each 0 .. size as x {
+            if is_empty(grid[(y * size + x).to(uint)]) : continue
+            filled = true
+            let ux = x.to(uint)
+            let uy = y.to(uint)
+            if ux < min_x : min_x = ux
+            if uy < min_y : min_y = uy
+            if ux > max_x : max_x = ux
+            if uy > max_y : max_y = uy
+        }
+    }
+    if !filled : return null
+    let width = max_x - min_x + 1
+    let height = max_y - min_y + 1
+    each recipes as recipe {
+        if recipe.width != width || recipe.height != height : continue
+        if shape_matches(recipe, grid, size, min_x, min_y, false) || shape_matches(recipe, grid, size, min_x, min_y, true) : return recipe
+    }
+    return null
+}
+
+fn shape_matches(recipe: Recipe, grid: Array[Stack], size: uint, left: uint, top: uint, mirrored: bool) bool {
+    let y : uint = 0
+    while y < recipe.height {
+        let x : uint = 0
+        while x < recipe.width {
+            let rx = mirrored ? recipe.width - 1 - x : x
+            let want = recipe.cells[y * recipe.width + rx]
+            let have = grid[(top + y) * size + left + x]
+            if want == Item.none {
+                if !is_empty(have) : return false
+            } else if is_empty(have) || have.item != want {
+                return false
+            }
+            x++
+        }
+        y++
+    }
+    return true
+}
+
+// Takes one item from every filled cell, after a craft
+fn consume_grid(grid: Array[Stack]) {
+    each grid as stack, i {
+        if is_empty(stack) : continue
+        let left = stack
+        left.count--
+        grid[i] = left.count == 0 ? Stack{} : left
+    }
+}

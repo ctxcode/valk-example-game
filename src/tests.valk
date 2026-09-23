@@ -2,6 +2,31 @@
 
 use raylib
 
+// Stone at height `y` over the chunks of a flat world
+fn floor(world: World, y: int) {
+    let x = -16
+    while x < 32 {
+        let z = -16
+        while z < 32 {
+            world.set_block(x, y, z, Block.stone)
+            z++
+        }
+        x++
+    }
+}
+
+fn near(a: f32, b: f32) bool {
+    let d = a - b
+    return d < 0.0001 && d > -0.0001
+}
+
+fn test_game(creative: bool) Game {
+    let world = flat_world()
+    floor(world, 9)
+    let spawn = raylib.Vector3{ x: 4.5, y: 10, z: 4.5 }
+    return Game{ world: world, player: Player.at(spawn), creative: creative, seed: 1, spawn: spawn }
+}
+
 fn flat_world() World {
     let world = World.new(1, 2)
     world.mesher.upload = false
@@ -147,26 +172,18 @@ test "World: raycasts stop at the first block and name the face" {
 
 test "Player: falls, lands and stops at walls" {
     let world = flat_world()
-    let x = -16
-    while x < 32 {
-        let z = -16
-        while z < 32 {
-            world.set_block(x, 9, z, Block.stone)
-            z++
-        }
-        x++
-    }
-    let player = Player{ position: .{ x: 4.5, y: 20, z: 4.5 } }
-    each 0 .. 200 as _ : player.update(world, 1.0 / 60)
-    assert(player.on_ground)
-    assert(player.position.y == 10)
+    floor(world, 9)
+    let player = Player.at(.{ x: 4.5, y: 20, z: 4.5 })
+    each 0 .. 200 as _ : player.update(world, 1.0 / 60, false)
+    assert(player.body.on_ground)
+    assert(player.body.position.y == 10)
     // A wall two blocks high at x = 8
     world.set_block(8, 10, 4, Block.stone)
     world.set_block(8, 11, 4, Block.stone)
-    each 0 .. 100 as _ : player.move_axis(world, 0, 0.1)
-    assert(player.position.x < 8 - 0.29 && player.position.x > 8 - 0.32)
-    assert(player.overlaps(7, 10, 4))
-    assert(!player.overlaps(8, 10, 4))
+    each 0 .. 100 as _ : player.body.move_axis(world, 0, 0.1)
+    assert(player.body.position.x < 8 - 0.29 && player.body.position.x > 8 - 0.32)
+    assert(player.body.overlaps(7, 10, 4))
+    assert(!player.body.overlaps(8, 10, 4))
 }
 
 test "Mesher: hidden faces are left out" {
@@ -226,4 +243,170 @@ fn brightest_and_darkest(mesh: raylib.Mesh) (u8, u8) {
         i++
     }
     return (high, low)
+}
+
+test "Crafting: shapes anywhere in the grid, mirrored too" {
+    let recipes = all_recipes()
+    let grid = Array[Stack].fill(9, .{})
+    grid[4] = stack_of(Item.log, 1)
+    let planks = craft_result(recipes, grid, 3) ?! {
+        assert(false)
+        return
+    }
+    assert(planks.result == Item.planks && planks.count == 4)
+
+    // Sticks: two planks on top of each other, in the corner of a 2x2 grid
+    let small = Array[Stack].fill(9, .{})
+    small[1] = stack_of(Item.planks, 3)
+    small[3] = stack_of(Item.planks, 1)
+    let sticks = craft_result(recipes, small, 2) ?! {
+        assert(false)
+        return
+    }
+    assert(sticks.result == Item.stick && sticks.count == 4)
+    consume_grid(small)
+    assert(small[1].count == 2 && is_empty(small[3]))
+    assert(!isset(craft_result(recipes, small, 2)))
+
+    // A stone pickaxe: cobblestone on top, two sticks down the middle
+    let tool = Array[Stack].fill(9, .{})
+    tool[0] = stack_of(Item.cobblestone, 1)
+    tool[1] = stack_of(Item.cobblestone, 1)
+    tool[2] = stack_of(Item.cobblestone, 1)
+    tool[4] = stack_of(Item.stick, 1)
+    tool[7] = stack_of(Item.stick, 1)
+    assert((craft_result(recipes, tool, 3) ?? planks).result == Item.stone_pickaxe)
+    // One wrong ingredient spoils it
+    tool[1] = stack_of(Item.planks, 1)
+    assert(!isset(craft_result(recipes, tool, 3)))
+
+    // An axe faces either way
+    let axe = Array[Stack].fill(9, .{})
+    axe[1] = stack_of(Item.iron_ingot, 1)
+    axe[2] = stack_of(Item.iron_ingot, 1)
+    axe[5] = stack_of(Item.iron_ingot, 1)
+    axe[4] = stack_of(Item.stick, 1)
+    axe[7] = stack_of(Item.stick, 1)
+    assert((craft_result(recipes, axe, 3) ?? planks).result == Item.iron_axe)
+}
+
+test "Inventory: stacks fill up, tools do not stack" {
+    let inventory = Inventory{}
+    assert(is_empty(inventory.add(stack_of(Item.dirt, 50))))
+    assert(is_empty(inventory.add(stack_of(Item.dirt, 30))))
+    assert(inventory.get(0).count == 64 && inventory.get(1).count == 16)
+    assert(inventory.count(Item.dirt) == 80)
+    inventory.add(stack_of(Item.wooden_pickaxe, 1))
+    inventory.add(stack_of(Item.wooden_pickaxe, 1))
+    assert(inventory.get(2).item == Item.wooden_pickaxe && inventory.get(3).item == Item.wooden_pickaxe)
+    // Wear breaks the tool at its durability
+    inventory.wear(2, 58)
+    assert(inventory.get(2).wear == 58)
+    inventory.wear(2, 1)
+    assert(is_empty(inventory.get(2)))
+    inventory.take_one(1)
+    assert(inventory.get(1).count == 15)
+    // Only into the main slots
+    let left = inventory.add_between(stack_of(Item.sand, 64), HOTBAR_SIZE, INVENTORY_SIZE)
+    assert(is_empty(left) && inventory.get(HOTBAR_SIZE).item == Item.sand)
+    // Full: the rest comes back
+    each 0 .. INVENTORY_SIZE as i : inventory.set(i.to(uint), stack_of(Item.stone, 64))
+    let rest = inventory.add(stack_of(Item.log, 5))
+    assert(rest.item == Item.log && rest.count == 5)
+}
+
+test "Mining: the right tool is faster, and some blocks need one" {
+    assert(near(break_time(Block.grass, Item.none), 0.9))
+    assert(near(break_time(Block.grass, Item.stone_shovel), 0.225))
+    // Stone by hand is slow and gives nothing
+    assert(near(break_time(Block.stone, Item.none), 7.5))
+    assert(!can_harvest(Block.stone, Item.none))
+    assert(near(break_time(Block.stone, Item.wooden_pickaxe), 1.125))
+    assert(can_harvest(Block.stone, Item.wooden_pickaxe))
+    assert(!can_harvest(Block.iron_ore, Item.wooden_pickaxe))
+    assert(can_harvest(Block.iron_ore, Item.stone_pickaxe))
+    // An axe is no help on stone
+    assert(near(break_time(Block.stone, Item.iron_axe), 7.5))
+    assert(break_time(Block.bedrock, Item.iron_pickaxe) < 0)
+    assert(block_drop(Block.grass, 0) == Item.dirt)
+    assert(block_drop(Block.stone, 0) == Item.cobblestone)
+    assert(block_drop(Block.glass, 0) == Item.none)
+    assert(block_drop(Block.leaves, 3) == Item.stick && block_drop(Block.leaves, 50) == Item.none)
+}
+
+test "Game: breaking blocks drops them in survival, not in creative" {
+    let game = test_game(false)
+    game.world.set_block(6, 10, 6, Block.log)
+    game.break_block(6, 10, 6)
+    assert(game.world.block(6, 10, 6) == Block.air)
+    assert(game.drops.length == 1 && game.drops[0].stack.item == Item.log)
+    // Stone with no pickaxe: gone, nothing to pick up
+    game.break_block(6, 9, 6)
+    assert(game.drops.length == 1)
+
+    let creative = test_game(true)
+    creative.world.set_block(6, 10, 6, Block.log)
+    creative.break_block(6, 10, 6)
+    assert(creative.drops.length == 0)
+}
+
+test "Game: items on the ground are picked up" {
+    let game = test_game(false)
+    game.drops.append(Drop.at(stack_of(Item.beef, 3), .{ x: 5, y: 10, z: 4.5 }, .{}))
+    game.drops.append(Drop.at(stack_of(Item.feather, 1), .{ x: 12, y: 10, z: 4.5 }, .{}))
+    each 0 .. 60 as _ : game.update_drops(1.0 / 30)
+    assert(game.inventory.count(Item.beef) == 3)
+    assert(game.inventory.count(Item.feather) == 0 && game.drops.length == 1)
+}
+
+test "Game: falls hurt in survival, and dying drops everything" {
+    let game = test_game(false)
+    game.inventory.add(stack_of(Item.planks, 10))
+    game.player = Player.at(.{ x: 4.5, y: 16.5, z: 4.5 })
+    each 0 .. 120 as _ : game.update_player(1.0 / 60, false)
+    // 6.5 blocks: 3 are free
+    assert(game.player.health == 17)
+    assert(!game.dead)
+
+    game.player = Player.at(.{ x: 4.5, y: 40, z: 4.5 })
+    each 0 .. 240 as _ : game.update_player(1.0 / 60, false)
+    assert(game.dead && game.player.health == 0)
+    assert(game.death_cause == "fell from a high place")
+    assert(game.inventory.count(Item.planks) == 0 && game.drops.length == 1)
+    game.respawn()
+    assert(!game.dead && game.player.health == MAX_HEALTH.to(f32))
+
+    let creative = test_game(true)
+    creative.player = Player.at(.{ x: 4.5, y: 40, z: 4.5 })
+    each 0 .. 240 as _ : creative.update_player(1.0 / 60, false)
+    assert(creative.player.health == MAX_HEALTH.to(f32))
+}
+
+test "Animals: they fall, get hurt, die and leave loot" {
+    let world = flat_world()
+    floor(world, 9)
+    let cow = Mob.spawn(MobKind.cow, .{ x: 4.5, y: 14, z: 4.5 })
+    each 0 .. 120 as _ : cow.update(world, 1.0 / 60)
+    assert(cow.body.on_ground && cow.body.position.y == 10)
+    assert(!cow.damage(4, .{ x: 0, y: 10, z: 4.5 }))
+    assert(cow.health == 6 && cow.hurt > 0 && cow.panic > 0)
+    // Knocked away from the hit
+    assert(cow.body.velocity.x > 0)
+    assert(cow.damage(6, .{ x: 0, y: 10, z: 4.5 }))
+    assert(!cow.alive())
+    assert(!cow.damage(6, .{ x: 0, y: 10, z: 4.5 }))
+
+    let loot = mob_loot(MobKind.cow, 99)
+    assert(loot[0].item == Item.beef && loot[0].count == 1 && loot[1].item == Item.leather && loot[1].count == 2)
+    assert(mob_loot(MobKind.cow, 2)[0].count == 3 && mob_loot(MobKind.cow, 2).length == 1)
+    assert(mob_loot(MobKind.sheep, 0)[0].item == Item.wool)
+    assert(mob_loot(MobKind.chicken, 0)[0].item == Item.chicken)
+    assert(mob_loot(MobKind.pig, 5)[0].item == Item.porkchop)
+}
+
+test "Menu: seeds from text" {
+    assert(seed_from_text("1234") == 1234)
+    assert(seed_from_text(" 42 ") == 42)
+    assert(seed_from_text("hello") == seed_from_text("hello"))
+    assert(seed_from_text("hello") != seed_from_text("world"))
 }

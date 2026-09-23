@@ -1,0 +1,57 @@
+// Items lying in the world: dropped by broken blocks, killed animals, or the player
+
+use raylib
+use valk.math
+
+value DROP_SIZE (0.25)
+// Seconds before a new drop can be picked up, and before it disappears
+value PICKUP_DELAY (0.5)
+value DROP_LIFETIME (300.0)
+
+class Drop {
+    stack: Stack
+    body: Body
+    age: f32 (0)
+
+    static fn at(stack: Stack, position: raylib.Vector3, velocity: raylib.Vector3) Drop {
+        let half = (DROP_SIZE / 2).to(f32)
+        let body = Body{ position: position, velocity: velocity, half: half, height: DROP_SIZE.to(f32) }
+        return Drop{ stack: stack, body: body }
+    }
+
+    // Popping out of a block or an animal, in a random direction
+    static fn popped(stack: Stack, position: raylib.Vector3) Drop {
+        let angle = random_unit() * 6.28
+        let velocity = raylib.Vector3{ x: math.cos(angle).to(f32) * 1.5, y: 4, z: math.sin(angle).to(f32) * 1.5 }
+        return Drop.at(stack, position, velocity)
+    }
+
+    fn update(world: World, dt: f32) {
+        this.age += dt
+        let in_water = this.body.block_at(world, 0.1) == Block.water
+        if in_water {
+            this.body.velocity.y += (1 - this.body.velocity.y) * 4 * dt
+        } else {
+            this.body.velocity.y -= GRAVITY.to(f32) * dt
+        }
+        let drag : f32 = this.body.on_ground ? 8 : 1
+        let keep : f32 = 1 - drag * dt > 0 ? 1 - drag * dt : 0
+        this.body.velocity.x *= keep
+        this.body.velocity.z *= keep
+        this.body.move(world, dt)
+    }
+
+    fn can_pick_up() bool {
+        return this.age >= PICKUP_DELAY.to(f32)
+    }
+
+    fn expired() bool {
+        return this.age > DROP_LIFETIME.to(f32) || this.body.position.y < -10
+    }
+
+    // Center of the spinning item, bobbing up and down
+    fn center() raylib.Vector3 {
+        let bob = (math.sin(this.age.to(float) * 2.5) * 0.06 + 0.06).to(f32)
+        return this.body.position + raylib.Vector3{ y: DROP_SIZE.to(f32) / 2 + bob }
+    }
+}

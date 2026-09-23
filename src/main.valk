@@ -3,269 +3,452 @@
 use raylib
 use valk.math
 
+enum Screen : u8 {
+    title
+    create
+    loading
+    playing
+    paused
+    inventory
+    dead
+}
+
 class Options {
-    seed: uint (1337)
+    seed: ?uint (null)
+    creative: bool (false)
     distance: int (8)
-    // Save one frame to this file once the world is loaded, then quit
-    screenshot: String ("")
     width: i32 (1280)
     height: i32 (720)
-    // Where to start and where to look, in degrees; the default spot is the land nearest the origin
+    // Skip the menus and start a world right away
+    play: bool (false)
+    // Save one frame to this file once the world is loaded, then quit
+    screenshot: String ("")
+    // The screenshot is of the title screen, or of the inventory
+    title: bool (false)
+    inventory: bool (false)
+    hud: bool (false)
+    // Start with some blocks and tools, to try things out
+    kit: bool (false)
+    // One of each animal in front of the player
+    animals: bool (false)
+    // Play this many frames once loaded, print the frame rate and quit
+    frames: int (0)
+    // Where to start and where to look, in degrees
     at_x: ?int (null)
     at_z: ?int (null)
-    yaw: f32 (45)
-    pitch: f32 (-12)
-    // Start this far above the ground, flying
     up: int (0)
-    // Keep the crosshair, hotbar and text in the screenshot
-    hud: bool (false)
+    yaw: ?f32 (null)
+    pitch: ?f32 (null)
 }
 
 fn parse_options(args: Array[String]) Options {
-    let options = Options{}
+    let o = Options{}
     let i : uint = 1
     while i < args.length {
         let arg = args[i]
         let next = i + 1 < args.length ? args[i + 1] : ""
+        let takes = true
         if arg == "--seed" {
-            options.seed = next.to(uint) !? options.seed
-            i++
+            o.seed = seed_from_text(next)
+            o.play = true
         } else if arg == "--distance" {
-            options.distance = next.to(int) !? options.distance
-            if options.distance < 2 : options.distance = 2
-            if options.distance > 24 : options.distance = 24
-            i++
-        } else if arg == "--screenshot" {
-            options.screenshot = next
-            i++
+            o.distance = next.to(int) !? o.distance
+            if o.distance < 2 : o.distance = 2
+            if o.distance > 24 : o.distance = 24
         } else if arg == "--size" {
             let parts = next.split("x")
             if parts.length == 2 {
-                options.width = parts[0].to(i32) !? options.width
-                options.height = parts[1].to(i32) !? options.height
+                o.width = parts[0].to(i32) !? o.width
+                o.height = parts[1].to(i32) !? o.height
             }
-            i++
+        } else if arg == "--screenshot" {
+            o.screenshot = next
         } else if arg == "--at" {
             let parts = next.split(",")
             if parts.length == 2 {
-                options.at_x = parts[0].to(int) !? null
-                options.at_z = parts[1].to(int) !? null
+                o.at_x = parts[0].to(int) !? null
+                o.at_z = parts[1].to(int) !? null
             }
-            i++
-        } else if arg == "--hud" {
-            options.hud = true
+        } else if arg == "--frames" {
+            o.frames = next.to(int) !? 0
+            o.play = true
         } else if arg == "--up" {
-            options.up = next.to(int) !? 0
-            i++
+            o.up = next.to(int) !? 0
         } else if arg == "--yaw" {
-            options.yaw = next.to(f32) !? options.yaw
-            i++
+            o.yaw = next.to(f32) !? null
         } else if arg == "--pitch" {
-            options.pitch = next.to(f32) !? options.pitch
-            i++
-        } else if arg == "--help" || arg == "-h" {
-            println("valkcraft [--seed N] [--distance CHUNKS] [--size WxH] [--at X,Z] [--up BLOCKS] [--yaw DEG] [--pitch DEG] [--screenshot FILE [--hud]]")
-            exit(0)
+            o.pitch = next.to(f32) !? null
+        } else {
+            takes = false
+            if arg == "--creative" : o.creative = true
+            else if arg == "--play" : o.play = true
+            else if arg == "--title" : o.title = true
+            else if arg == "--inventory" : o.inventory = true
+            else if arg == "--hud" : o.hud = true
+            else if arg == "--kit" : o.kit = true
+            else if arg == "--animals" : o.animals = true
+            else if arg == "--help" || arg == "-h" {
+                println("valkcraft [--seed TEXT] [--creative] [--play] [--distance CHUNKS] [--size WxH]")
+                println("          [--screenshot FILE [--title] [--inventory] [--hud]] [--kit] [--animals] [--at X,Z] [--up N] [--yaw DEG] [--pitch DEG]")
+                exit(0)
+            }
         }
+        if takes : i++
         i++
     }
-    return options
+    if o.screenshot.bytes > 0 && !o.title {
+        o.play = true
+        // The same world every time, unless asked otherwise
+        if !isset(o.seed) : o.seed = 1337
+    }
+    return o
+}
+
+class App {
+    res: Resources
+    ui: Ui
+    options: Options
+    screen: Screen (Screen.title)
+    clouds: Clouds
+    game: ?Game (null)
+    // The world behind the menus
+    panorama: ?World (null)
+    time: f32 (0)
+    seed_text: String ("")
+    creative: bool (false)
+    show_help: bool (true)
+    screenshots: int (0)
+    // Frames to ignore the mouse after it is captured, so the view does not jump
+    settle: int (0)
+    bench_frames: int (0)
+    bench_time: f32 (0)
+    quit: bool (false)
+
+    fn go(screen: Screen) {
+        let playing = screen == Screen.playing
+        let game = this.game
+        if playing && this.screen != Screen.playing && isset(game) : game.mouse_blocked = true
+        if playing && raylib.is_cursor_hidden() == false {
+            raylib.disable_cursor()
+            this.settle = 2
+        }
+        if !playing && raylib.is_cursor_hidden() : raylib.enable_cursor()
+        this.screen = screen
+    }
+
+    fn start_game(seed: uint, creative: bool) {
+        let panorama = this.panorama
+        if isset(panorama) {
+            panorama.unload()
+            this.panorama = null
+        }
+        let game = Game.new(seed, creative, this.options.distance)
+        let o = this.options
+        let at_x = o.at_x
+        let at_z = o.at_z
+        if isset(at_x) && isset(at_z) {
+            let height = game.world.terrain.height(at_x, at_z)
+            if height < SEA_LEVEL : height = SEA_LEVEL
+            game.player = Player.at(.{ x: at_x.to(f32) + 0.5, y: (height + 1).to(f32), z: at_z.to(f32) + 0.5 })
+        }
+        if o.up > 0 {
+            // Creative players hover there; the others fall
+            game.player.body.position.y += o.up.to(f32)
+            game.player.fall_top = game.player.body.position.y
+            game.player.flying = creative
+        }
+        let yaw = o.yaw
+        let pitch = o.pitch
+        if isset(yaw) : game.player.yaw = yaw * raylib.DEG2RAD.to(f32)
+        if isset(pitch) : game.player.pitch = pitch * raylib.DEG2RAD.to(f32)
+        if o.kit : give_kit(game)
+        if o.animals {
+            // One of each, in a row in front of the player
+            let p = game.player.body.position
+            let forward = game.player.forward()
+            let side = raylib.Vector3{ x: -forward.z, z: forward.x }.normalize()
+            each 0 .. 4 as i {
+                let at = p + raylib.Vector3{ x: forward.x, z: forward.z }.normalize().scale(3) + side.scale((i.to(f32) - 1) * 1.8)
+                let mob = Mob.spawn(mob_kind_of(i.to(uint)), at)
+                mob.yaw = game.player.yaw + 3.1416 + 0.6
+                mob.heading = mob.yaw
+                mob.timer = 100
+                game.mobs.append(mob)
+            }
+        }
+        this.game = game
+        let view = (o.distance * CHUNK_SIZE).to(f32)
+        this.res.set_fog(sky_color(), view * 0.55, view * 0.95)
+        this.go(Screen.loading)
+    }
+
+    fn to_title() {
+        let game = this.game
+        if isset(game) {
+            game.unload()
+            this.game = null
+        }
+        this.go(Screen.title)
+    }
+
+    fn panorama_world() World {
+        let existing = this.panorama
+        if isset(existing) : return existing
+        let world = World.new(1337, 7)
+        this.panorama = world
+        this.res.set_fog(sky_color(), 7 * 16 * 0.55, 7 * 16 * 0.95)
+        return world
+    }
+
+    fn frame(dt: f32) {
+        this.time += dt
+        this.ui.begin()
+        let screen = this.screen
+        if screen == Screen.title || screen == Screen.create {
+            this.menu_frame(dt)
+            return
+        }
+        let game = this.game ?! {
+            this.go(Screen.title)
+            return
+        }
+        if screen == Screen.loading {
+            let p = game.player.body.position
+            let cx = floor_div(math.floor(p.x).to(int), CHUNK_SIZE)
+            let cz = floor_div(math.floor(p.z).to(int), CHUNK_SIZE)
+            let ready = game.world.update(cx, cz, 24)
+            raylib.begin_drawing()
+            let done, total = game.world.progress(cx, cz)
+            draw_loading(done, total)
+            raylib.end_drawing()
+            if ready {
+                game.update(0, false)
+                if this.options.inventory {
+                    this.go(Screen.inventory)
+                } else {
+                    this.go(Screen.playing)
+                }
+            }
+            return
+        }
+        this.game_frame(game, dt)
+    }
+
+    fn menu_frame(dt: f32) {
+        let world = this.panorama_world()
+        // The camera turns slowly over an island
+        let center = raylib.Vector3{ x: -260, y: (world.terrain.height(-260, -700) + 22).to(f32), z: -700 }
+        let angle = this.time * 0.04 - 1.4
+        let camera = raylib.Camera3D{
+            position: center
+            target: center + raylib.Vector3{ x: math.cos(angle).to(f32), y: -0.28, z: math.sin(angle).to(f32) }
+            up: .{ y: 1 }
+            fovy: 70
+        }
+        world.update(floor_div(-260, CHUNK_SIZE), floor_div(-700, CHUNK_SIZE), 6)
+        world.fresh.clear()
+
+        raylib.begin_drawing()
+        raylib.clear_background(sky_color())
+        this.res.shader.set_vec3(this.res.view_location, camera.position)
+        raylib.begin_mode_3d(camera)
+        this.res.set_tint(raylib.WHITE)
+        world.draw(this.res.material, camera)
+        this.clouds.draw(camera, this.time, 7 * 16 * 1.3)
+        raylib.end_mode_3d()
+
+        if this.screen == Screen.title {
+            let action = title_screen(this.ui, this.time)
+            if action == MenuAction.open_create {
+                this.seed_text = ""
+                this.screen = Screen.create
+            }
+            if action == MenuAction.quit : this.quit = true
+        } else {
+            this.type_seed()
+            let action = create_screen(this.ui, this.seed_text, this.creative, this.time)
+            if action == MenuAction.toggle_mode : this.creative = !this.creative
+            if action == MenuAction.back : this.screen = Screen.title
+            if action == MenuAction.create {
+                raylib.end_drawing()
+                this.start_game(seed_from_text(this.seed_text), this.creative)
+                return
+            }
+        }
+        raylib.end_drawing()
+        if raylib.is_key_pressed(.f2) {
+            this.screenshots++
+            raylib.take_screenshot("valkcraft-" + this.screenshots + ".png")
+        }
+        if this.options.title && this.options.screenshot.bytes > 0 && this.time > 1.5 {
+            this.save_screenshot()
+            this.quit = true
+        }
+    }
+
+    fn type_seed() {
+        let ch = raylib.get_char_pressed()
+        while ch > 0 {
+            if ch >= 32 && ch < 127 && this.seed_text.bytes < 32 {
+                let buf = ByteBuffer.new(this.seed_text.bytes + 1)
+                buf.write(this.seed_text)
+                buf.write_byte(ch.to(u8))
+                this.seed_text = buf.to_string()
+            }
+            ch = raylib.get_char_pressed()
+        }
+        if (raylib.is_key_pressed(.backspace) || raylib.is_key_pressed_repeat(.backspace)) && this.seed_text.bytes > 0 {
+            this.seed_text = this.seed_text.range(0, this.seed_text.bytes - 1)
+        }
+    }
+
+    fn game_frame(game: Game, dt: f32) {
+        let screen = this.screen
+        if screen == Screen.playing {
+            if this.settle > 0 {
+                this.settle--
+                raylib.get_mouse_delta()
+            } else {
+                game.player.look(raylib.get_mouse_delta())
+            }
+            game.handle_input(dt)
+            if raylib.is_key_pressed(.escape) : this.go(Screen.paused)
+            else if raylib.is_key_pressed(.e) {
+                game.craft_size = 2
+                this.go(Screen.inventory)
+            } else if game.wants_table {
+                game.craft_size = 3
+                this.go(Screen.inventory)
+            }
+            game.wants_table = false
+            if raylib.is_key_pressed(.h) : this.show_help = !this.show_help
+        } else if screen == Screen.inventory {
+            if raylib.is_key_pressed(.e) || raylib.is_key_pressed(.escape) {
+                game.return_grid()
+                game.craft_size = 2
+                this.go(Screen.playing)
+            }
+        } else if screen == Screen.paused {
+            if raylib.is_key_pressed(.escape) : this.go(Screen.playing)
+        }
+        // The click that opened a window (a right click on a crafting table) is not also a
+        // click inside it
+        if this.screen != screen {
+            this.ui.clicked = false
+            this.ui.right_clicked = false
+        }
+        // A paused game stands still
+        if this.screen != Screen.paused : game.update(dt, this.screen == Screen.playing)
+        if game.dead && this.screen != Screen.dead {
+            game.return_grid()
+            this.go(Screen.dead)
+        }
+
+        let camera = game.player.camera(70)
+        raylib.begin_drawing()
+        raylib.clear_background(sky_color())
+        this.res.shader.set_vec3(this.res.view_location, camera.position)
+        raylib.begin_mode_3d(camera)
+        game.draw(this.res, camera)
+        let view = (game.world.radius * CHUNK_SIZE).to(f32)
+        this.clouds.draw(camera, this.time, view * 1.3)
+        raylib.end_mode_3d()
+
+        let screenshot = this.options.screenshot.bytes > 0
+        draw_overlays(game, camera)
+        if !screenshot || this.options.hud || this.options.inventory {
+            draw_crosshair()
+            draw_hotbar(this.ui, game)
+            if !game.creative : draw_health(this.res, game)
+            draw_info(game)
+            if this.show_help && this.screen == Screen.playing : draw_help(game.creative)
+        }
+        if this.screen == Screen.inventory {
+            inventory_screen(this.ui, game)
+        } else if this.screen == Screen.paused && screen == Screen.paused {
+            let action = pause_screen(this.ui, game)
+            if action == MenuAction.resume : this.go(Screen.playing)
+            if action == MenuAction.to_title {
+                raylib.end_drawing()
+                this.to_title()
+                return
+            }
+        } else if this.screen == Screen.dead {
+            let action = death_screen(this.ui, game)
+            if action == MenuAction.respawn {
+                game.respawn()
+                this.go(Screen.playing)
+            }
+            if action == MenuAction.to_title {
+                raylib.end_drawing()
+                this.to_title()
+                return
+            }
+        }
+        raylib.end_drawing()
+        if screenshot {
+            this.save_screenshot()
+            this.quit = true
+        }
+        if raylib.is_key_pressed(.f2) {
+            this.screenshots++
+            raylib.take_screenshot("valkcraft-" + this.screenshots + ".png")
+        }
+    }
+
+    fn count_frame(dt: f32) {
+        if this.options.frames <= 0 || this.screen != Screen.playing : return
+        this.bench_frames++
+        this.bench_time += dt
+        if this.bench_frames >= this.options.frames {
+            println(this.bench_frames + " frames, " + whole(this.bench_frames.to(f32) / this.bench_time) + " fps")
+            this.quit = true
+        }
+    }
+
+    fn save_screenshot() {
+        let image = raylib.load_image_from_screen()
+        raylib.export_image(image, this.options.screenshot)
+        raylib.unload_image(image)
+    }
+}
+
+fn sky_color() raylib.Color {
+    return raylib.Color.rgb(142, 192, 238)
+}
+
+// A few stacks to start with (--kit)
+fn give_kit(game: Game) {
+    let kit = Array[Stack]{
+        stack_of(Item.stone_pickaxe, 1), stack_of(Item.stone_axe, 1), stack_of(Item.stone_shovel, 1), stack_of(Item.iron_sword, 1)
+        stack_of(Item.planks, 64), stack_of(Item.cobblestone, 64), stack_of(Item.log, 16), stack_of(Item.crafting_table, 1), stack_of(Item.porkchop, 8)
+        stack_of(Item.stick, 12), stack_of(Item.iron_ingot, 6), stack_of(Item.glass, 32), stack_of(Item.brick, 32), stack_of(Item.wool, 16)
+    }
+    each kit as stack : game.inventory.add(stack)
 }
 
 fn main(args: Array[String]) {
     let options = parse_options(args)
-    let screenshot = options.screenshot.bytes > 0
-
     raylib.set_trace_log_level(.warning)
     raylib.set_config_flags(raylib.FLAG_MSAA_4X_HINT | raylib.FLAG_WINDOW_RESIZABLE | raylib.FLAG_VSYNC_HINT)
     raylib.init_window(options.width, options.height, "Valkcraft")
     defer raylib.close_window()
     raylib.set_exit_key(.none)
 
-    let atlas = build_atlas()
-    let shader = raylib.load_shader_from_memory(BLOCK_VERTEX_SHADER, BLOCK_FRAGMENT_SHADER)
-    let fog_color_location = shader.location("fogColor")
-    let fog_start_location = shader.location("fogStart")
-    let fog_end_location = shader.location("fogEnd")
-    let view_location = shader.location("viewPos")
-    let material = raylib.load_material_default()
-    material.shader = shader
-    material.set_texture(.albedo, atlas)
-
-    let sky = raylib.Color.rgb(142, 192, 238)
-    let view = (options.distance * CHUNK_SIZE).to(f32)
-    shader.set_color(fog_color_location, sky)
-    shader.set_float(fog_start_location, view * 0.55)
-    shader.set_float(fog_end_location, view * 0.95)
-
-    let world = World.new(options.seed, options.distance)
-    let clouds = Clouds{ noise: Noise.new(options.seed + 99) }
-    let spawn_x, spawn_z = find_land(world.terrain)
-    let at_x = options.at_x
-    let at_z = options.at_z
-    if isset(at_x) && isset(at_z) {
-        spawn_x = at_x
-        spawn_z = at_z
+    let res = Resources.load()
+    let app = App{ res: res, ui: Ui{ res: res }, options: options, clouds: Clouds{ noise: Noise.new(99) }, creative: options.creative }
+    if options.play {
+        let seed = options.seed
+        app.start_game(isset(seed) ? seed : seed_from_text(""), options.creative)
     }
-    let spawn_height = world.terrain.height(spawn_x, spawn_z)
-    if spawn_height < SEA_LEVEL : spawn_height = SEA_LEVEL
-    let player = Player{
-        position: .{ x: spawn_x.to(f32) + 0.5, y: (spawn_height + 1 + options.up).to(f32), z: spawn_z.to(f32) + 0.5 }
-        yaw: options.yaw * raylib.DEG2RAD.to(f32)
-        pitch: options.pitch * raylib.DEG2RAD.to(f32)
-        flying: options.up > 0
-    }
-
-    let loaded = false
-    let mouse_captured = false
-    let show_help = true
-    let selected : uint = 0
-    let blocks = hotbar_blocks()
-    let break_cooldown : f32 = 0
-    let place_cooldown : f32 = 0
-    let screenshots = 0
-
-    while !raylib.window_should_close() {
+    while !raylib.window_should_close() && !app.quit {
         let dt = raylib.get_frame_time()
+        app.count_frame(dt)
         if dt > 0.05 : dt = 0.05
-        let cx = floor_div(math.floor(player.position.x).to(int), CHUNK_SIZE)
-        let cz = floor_div(math.floor(player.position.z).to(int), CHUNK_SIZE)
-
-        // Load the nearby world first, before the player can fall through it
-        let ready = world.update(cx, cz, loaded ? 2 : 24)
-        if !loaded && ready : loaded = true
-
-        let target : ?RayHit = null
-        if loaded {
-            // Mouse and keys
-            if mouse_captured {
-                player.look(raylib.get_mouse_delta())
-                if raylib.is_key_pressed(.escape) {
-                    raylib.enable_cursor()
-                    mouse_captured = false
-                }
-            } else if !screenshot && raylib.is_mouse_button_pressed(.left) {
-                raylib.disable_cursor()
-                mouse_captured = true
-                break_cooldown = 0.3
-            }
-            if raylib.is_key_pressed(.f) {
-                player.flying = !player.flying
-                player.velocity = .{}
-            }
-            if raylib.is_key_pressed(.h) : show_help = !show_help
-            if raylib.is_key_pressed(.f2) {
-                screenshots++
-                raylib.take_screenshot("valkcraft-" + screenshots + ".png")
-            }
-            each blocks as _, i {
-                if raylib.is_key_pressed(key_for_slot(i)) : selected = i
-            }
-            let wheel = raylib.get_mouse_wheel_move()
-            if wheel > 0 : selected = selected == 0 ? blocks.length - 1 : selected - 1
-            if wheel < 0 : selected = (selected + 1) % blocks.length
-
-            if !screenshot : player.update(world, dt)
-
-            // Breaking and placing, repeating while the button is held
-            target = world.raycast(player.eye(), player.forward(), 6)
-            break_cooldown -= dt
-            place_cooldown -= dt
-            if mouse_captured && isset(target) {
-                if raylib.is_mouse_button_down(.left) && break_cooldown <= 0 {
-                    if target.block != Block.bedrock : world.set_block(target.x, target.y, target.z, Block.air)
-                    break_cooldown = 0.22
-                }
-                if raylib.is_mouse_button_down(.right) && place_cooldown <= 0 {
-                    let px = target.x + target.normal_x
-                    let py = target.y + target.normal_y
-                    let pz = target.z + target.normal_z
-                    let there = world.block(px, py, pz)
-                    if (there == Block.air || there == Block.water) && !player.overlaps(px, py, pz) {
-                        world.set_block(px, py, pz, blocks[selected])
-                    }
-                    place_cooldown = 0.22
-                }
-            }
-            if !raylib.is_mouse_button_down(.left) : break_cooldown = 0
-            if !raylib.is_mouse_button_down(.right) : place_cooldown = 0
-        }
-
-        let camera = player.camera(70)
-        shader.set_vec3(view_location, camera.position)
-
-        raylib.begin_drawing()
-        raylib.clear_background(sky)
-        if loaded {
-            raylib.begin_mode_3d(camera)
-            world.draw(material, camera)
-            clouds.draw(camera, raylib.get_time().to(f32), view * 1.3)
-            if isset(target) {
-                let center = raylib.Vector3{ x: target.x.to(f32) + 0.5, y: target.y.to(f32) + 0.5, z: target.z.to(f32) + 0.5 }
-                raylib.draw_cube_wires(center, 1.01, 1.01, 1.01, raylib.Color.rgba(0, 0, 0, 200))
-            }
-            raylib.end_mode_3d()
-
-            if player.in_water && camera.position.y < SEA_LEVEL.to(f32) + 0.9 {
-                raylib.draw_rectangle(0, 0, raylib.get_screen_width(), raylib.get_screen_height(), raylib.Color.rgba(30, 70, 180, 90))
-            }
-            if !screenshot || options.hud {
-                draw_crosshair()
-                draw_hotbar(atlas, selected)
-                draw_info(player, world, target)
-                if show_help : draw_help()
-                if !mouse_captured && !screenshot : draw_paused()
-            }
-        } else {
-            let done, total = world.progress(cx, cz)
-            draw_loading(done, total)
-        }
-        raylib.end_drawing()
-
-        if screenshot && loaded {
-            let image = raylib.load_image_from_screen()
-            raylib.export_image(image, options.screenshot)
-            raylib.unload_image(image)
-            break
-        }
+        app.frame(dt)
     }
-
-    world.unload()
-    raylib.unload_shader(shader)
-    raylib.unload_texture(atlas)
-}
-
-// The dry column nearest the origin, walking out in growing squares
-fn find_land(terrain: Terrain) (int, int) {
-    let radius = 0
-    while radius < 400 {
-        let x = -radius
-        while x <= radius {
-            let z = -radius
-            while z <= radius {
-                if (x.abs() == radius || z.abs() == radius) && terrain.height(x, z) > SEA_LEVEL + 2 {
-                    // Not in a tree
-                    if terrain.tree_at(x, z, terrain.height(x, z)) == 0 : return (x, z)
-                }
-                z += 4
-            }
-            x += 4
-        }
-        radius += 4
-    }
-    return (0, 0)
-}
-
-fn key_for_slot(slot: uint) raylib.KeyboardKey {
-    match slot {
-        0 => return .one
-        1 => return .two
-        2 => return .three
-        3 => return .four
-        4 => return .five
-        5 => return .six
-        6 => return .seven
-        7 => return .eight
-        default => return .nine
-    }
+    let game = app.game
+    if isset(game) : game.unload()
+    let panorama = app.panorama
+    if isset(panorama) : panorama.unload()
 }

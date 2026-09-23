@@ -1,4 +1,4 @@
-// Block types, and how each one looks and behaves
+// Block types: how each one looks, what breaks it, and what it drops
 
 enum Block : u8 {
     air
@@ -16,31 +16,17 @@ enum Block : u8 {
     snow
     brick
     gravel
+    crafting_table
+    wool
+    iron_ore
 }
 
-// The blocks the hotbar offers, in slot order
-fn hotbar_blocks() Array[Block] {
-    return Array[Block]{ Block.grass, Block.dirt, Block.stone, Block.cobblestone, Block.planks, Block.log, Block.glass, Block.brick, Block.sand }
-}
-
-fn block_name(block: Block) String {
-    match block {
-        Block.air => return "Air"
-        Block.grass => return "Grass"
-        Block.dirt => return "Dirt"
-        Block.stone => return "Stone"
-        Block.cobblestone => return "Cobblestone"
-        Block.sand => return "Sand"
-        Block.water => return "Water"
-        Block.log => return "Log"
-        Block.leaves => return "Leaves"
-        Block.planks => return "Planks"
-        Block.glass => return "Glass"
-        Block.bedrock => return "Bedrock"
-        Block.snow => return "Snow"
-        Block.brick => return "Brick"
-        Block.gravel => return "Gravel"
-    }
+enum Tool : u8 {
+    none
+    pickaxe
+    axe
+    shovel
+    sword
 }
 
 // Players collide with it
@@ -61,7 +47,7 @@ fn face_visible(block: Block, neighbor: Block) bool {
     return neighbor != block || block == Block.leaves
 }
 
-// Texture tiles in the atlas, see atlas.valk
+// Texture tiles in the block atlas, see atlas.valk
 value TILE_GRASS_TOP (0)
 value TILE_GRASS_SIDE (1)
 value TILE_DIRT (2)
@@ -79,6 +65,15 @@ value TILE_SNOW (13)
 value TILE_SNOW_SIDE (14)
 value TILE_BRICK (15)
 value TILE_GRAVEL (16)
+value TILE_TABLE_TOP (17)
+value TILE_TABLE_SIDE (18)
+value TILE_WOOL (19)
+value TILE_IRON_ORE (20)
+// Plain white, for things colored by their vertices (animals)
+value TILE_WHITE (21)
+// Five stages of cracks on a block being broken
+value TILE_CRACK (22)
+value CRACK_STAGES (5)
 
 // Faces: 0 = +x, 1 = -x, 2 = +y (top), 3 = -y (bottom), 4 = +z, 5 = -z
 fn block_tile(block: Block, face: uint) uint {
@@ -99,6 +94,97 @@ fn block_tile(block: Block, face: uint) uint {
         Block.snow => return top ? TILE_SNOW : (bottom ? TILE_DIRT : TILE_SNOW_SIDE)
         Block.brick => return TILE_BRICK
         Block.gravel => return TILE_GRAVEL
-        Block.air => return TILE_STONE
+        Block.crafting_table => return top ? TILE_TABLE_TOP : (bottom ? TILE_PLANKS : TILE_TABLE_SIDE)
+        Block.wool => return TILE_WOOL
+        Block.iron_ore => return TILE_IRON_ORE
+        Block.air => return TILE_WHITE
+    }
+}
+
+// Seconds to break it with a bare hand and the right tool; below 0 it cannot be broken
+fn block_hardness(block: Block) f32 {
+    match block {
+        Block.grass => return 0.6
+        Block.dirt => return 0.5
+        Block.sand => return 0.5
+        Block.gravel => return 0.6
+        Block.snow => return 0.2
+        Block.stone => return 1.5
+        Block.cobblestone => return 2
+        Block.brick => return 2
+        Block.iron_ore => return 3
+        Block.log => return 2
+        Block.planks => return 2
+        Block.crafting_table => return 2.5
+        Block.leaves => return 0.2
+        Block.glass => return 0.3
+        Block.wool => return 0.8
+        Block.bedrock => return -1
+        Block.water => return -1
+        Block.air => return -1
+    }
+}
+
+// The tool that breaks it fastest
+fn block_tool(block: Block) Tool {
+    match block {
+        Block.grass => return Tool.shovel
+        Block.dirt => return Tool.shovel
+        Block.sand => return Tool.shovel
+        Block.gravel => return Tool.shovel
+        Block.snow => return Tool.shovel
+        Block.stone => return Tool.pickaxe
+        Block.cobblestone => return Tool.pickaxe
+        Block.brick => return Tool.pickaxe
+        Block.iron_ore => return Tool.pickaxe
+        Block.log => return Tool.axe
+        Block.planks => return Tool.axe
+        Block.crafting_table => return Tool.axe
+        default => return Tool.none
+    }
+}
+
+// The pickaxe tier it takes to get anything out of it: 1 wood, 2 stone
+fn block_tier(block: Block) uint {
+    if block == Block.iron_ore : return 2
+    if block == Block.stone || block == Block.cobblestone || block == Block.brick : return 1
+    return 0
+}
+
+fn tier_speed(tier: uint) f32 {
+    if tier == 1 : return 2
+    if tier == 2 : return 4
+    if tier == 3 : return 6
+    return 1
+}
+
+// Whether breaking it with `held` drops something
+fn can_harvest(block: Block, held: Item) bool {
+    let needed = block_tier(block)
+    if needed == 0 : return true
+    return item_tool(held) == Tool.pickaxe && item_tier(held) >= needed
+}
+
+// Seconds of digging to break it, like Minecraft: a block that needs a tool takes much
+// longer without it, the right tool divides the time by its speed
+fn break_time(block: Block, held: Item) f32 {
+    let hardness = block_hardness(block)
+    if hardness < 0 : return -1
+    let tool = block_tool(block)
+    let speed : f32 = 1
+    if tool != Tool.none && item_tool(held) == tool : speed = tier_speed(item_tier(held))
+    let factor : f32 = can_harvest(block, held) ? 1.5 : 5
+    return hardness * factor / speed
+}
+
+// What a broken block leaves behind, when it can be harvested. `roll` is 0 .. 99.
+fn block_drop(block: Block, roll: uint) Item {
+    match block {
+        Block.grass => return Item.dirt
+        Block.stone => return Item.cobblestone
+        Block.iron_ore => return Item.iron_ingot
+        Block.glass => return Item.none
+        Block.leaves => return roll < 8 ? Item.stick : Item.none
+        default => return block_item(block)
     }
 }

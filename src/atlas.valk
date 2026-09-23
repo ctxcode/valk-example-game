@@ -4,7 +4,7 @@ use raylib
 
 value TILE_SIZE (16)
 value ATLAS_COLUMNS (8)
-value ATLAS_ROWS (3)
+value ATLAS_ROWS (4)
 
 // Texture coordinates of a tile: left, top, right, bottom. Pulled in a little so
 // neighbouring tiles never bleed in at the edges.
@@ -174,6 +174,73 @@ fn build_atlas() raylib.Texture {
             let joint = y % 4 == 3 || (x + (row % 2) * 4) % 8 == 7
             let color = joint ? raylib.Color.rgb(176, 166, 154) : shade(raylib.Color.rgb(150, 64, 46), p.jitter(x, y, 12))
             p.put(x, y, color)
+        }
+    }
+
+    // Crafting table: planks with a grid on top, tools hanging on the sides
+    p.noisy(TILE_TABLE_TOP, raylib.Color.rgb(166, 132, 80), 8)
+    each 0 .. 16 as i {
+        let edge = raylib.Color.rgb(96, 70, 40)
+        p.put(i, 0, edge)
+        p.put(i, 15, edge)
+        p.put(0, i, edge)
+        p.put(15, i, edge)
+        if i > 1 && i < 14 {
+            p.put(i, 5, shade(edge, 20))
+            p.put(i, 10, shade(edge, 20))
+            p.put(5, i, shade(edge, 20))
+            p.put(10, i, shade(edge, 20))
+        }
+    }
+    p.tile = TILE_TABLE_SIDE
+    each 0 .. 16 as y {
+        each 0 .. 16 as x {
+            let seam = y % 4 == 3
+            let top = y < 3
+            let base = top ? raylib.Color.rgb(120, 90, 55) : raylib.Color.rgb(166, 132, 80)
+            p.put(x, y, shade(base, seam ? -40 : p.jitter(x / 3, y, 8)))
+        }
+    }
+    // A saw and a hammer
+    each 0 .. 6 as i {
+        p.put(3 + i, 6, raylib.Color.rgb(190, 190, 195))
+        p.put(3 + i, 7, raylib.Color.rgb(150, 150, 155))
+        p.put(11, 5 + i, raylib.Color.rgb(90, 64, 36))
+    }
+    p.put(2, 6, raylib.Color.rgb(90, 64, 36))
+    p.put(2, 7, raylib.Color.rgb(90, 64, 36))
+    each 0 .. 4 as i : p.put(9 + i, 4, raylib.Color.rgb(120, 120, 125))
+
+    p.noisy(TILE_WOOL, raylib.Color.rgb(233, 233, 233), 10)
+    p.noisy(TILE_IRON_ORE, raylib.Color.rgb(125, 125, 125), 10)
+    each 0 .. 16 as y {
+        each 0 .. 16 as x {
+            if p.chance(x / 2, y / 2, 4, 22) : p.put(x, y, shade(raylib.Color.rgb(216, 175, 147), p.jitter(x, y, 14)))
+        }
+    }
+    p.noisy(TILE_WHITE, raylib.WHITE, 0)
+
+    // Cracks, one more stroke per stage
+    each 0 .. CRACK_STAGES as stage {
+        p.tile = TILE_CRACK + stage.to(uint)
+        let strokes = 2 + stage * 2
+        each 0 .. strokes as s {
+            let h = hash_position(99, s, 7)
+            let x = (h % 16).to(int)
+            let y = ((h >> 8) % 16).to(int)
+            let length = 3 + ((h >> 16) % 5).to(int)
+            each 0 .. length as _ {
+                p.put(x, y, raylib.Color.rgba(20, 20, 20, 210))
+                let turn = hash_position(h, x, y) % 4
+                if turn == 0 : x++
+                else if turn == 1 : x--
+                else if turn == 2 : y++
+                else : y--
+                if x < 0 : x = 0
+                if x > 15 : x = 15
+                if y < 0 : y = 0
+                if y > 15 : y = 15
+            }
         }
     }
 

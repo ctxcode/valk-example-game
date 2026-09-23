@@ -1,4 +1,5 @@
-// The block shader: texture times the vertex light, fading into the sky with distance.
+// The block shader: texture times the vertex light (and a tint, red for a hurt animal),
+// fading into the sky with distance.
 // Transparent texels (leaves, glass) are cut out. Texture coordinates are sampled at
 // the centroid, so multisampling never reads the tile next door at an edge.
 
@@ -30,11 +31,12 @@ uniform vec4 colDiffuse;
 uniform vec4 fogColor;
 uniform float fogStart;
 uniform float fogEnd;
+uniform vec4 tint;
 out vec4 finalColor;
 void main() {
     vec4 texel = texture(texture0, fragTexCoord);
     if (texel.a < 0.4) discard;
-    vec4 color = texel * colDiffuse * fragColor;
+    vec4 color = texel * colDiffuse * fragColor * tint;
     float fog = clamp((fragDistance - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
     finalColor = vec4(mix(color.rgb, fogColor.rgb, fog), color.a);
 }
