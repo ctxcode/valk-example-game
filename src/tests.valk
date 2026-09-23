@@ -410,3 +410,101 @@ test "Menu: seeds from text" {
     assert(seed_from_text("hello") == seed_from_text("hello"))
     assert(seed_from_text("hello") != seed_from_text("world"))
 }
+
+fn test_saves_dir(name: String) String {
+    let dir = __DIR__ + "/../debug/test-saves/" + name
+    delete_world(dir)
+    make_dirs(dir)
+    return dir
+}
+
+test "Saves: a world comes back as it was left" {
+    let dir = test_saves_dir("round-trip")
+    let game = test_game(false)
+    game.name = "My World"
+    game.folder = new_world_folder(dir, game.name)
+    game.world.folder = game.folder
+    game.created = 1000
+    game.world.set_block(3, 12, 5, Block.brick)
+    game.world.set_block(-2, 11, -7, Block.planks)
+    game.inventory.add(stack_of(Item.stone_pickaxe, 1))
+    game.inventory.wear(0, 7)
+    game.inventory.set(20, stack_of(Item.cobblestone, 33))
+    game.drops.append(Drop.at(stack_of(Item.wool, 2), .{ x: 1.5, y: 10, z: 2.5 }, .{}))
+    game.player.body.position = .{ x: 6.5, y: 10, z: 7.5 }
+    game.player.yaw = 1.25
+    game.player.health = 13
+    game.selected = 4
+    game.save()
+    assert(!(game.world.chunk(0, 0) ?? Chunk{ cx: 9, cz: 9 }).unsaved)
+
+    let worlds = list_worlds(dir)
+    assert(worlds.length == 1)
+    let info = worlds[0]
+    assert(info.name == "My World" && !info.creative && info.seed == 1 && info.created == 1000)
+    assert(info.folder.ends_with("my-world"))
+
+    let loaded = Game.load(info, 2)
+    loaded.world.mesher.upload = false
+    assert(loaded.name == "My World" && loaded.folder == info.folder)
+    assert(loaded.player.body.position.x == 6.5 && loaded.player.body.position.z == 7.5)
+    assert(loaded.player.yaw == 1.25 && loaded.player.health == 13 && loaded.selected == 4)
+    let tool = loaded.inventory.get(0)
+    assert(tool.item == Item.stone_pickaxe && tool.wear == 7)
+    assert(loaded.inventory.get(20).item == Item.cobblestone && loaded.inventory.get(20).count == 33)
+    assert(loaded.drops.length == 1 && loaded.drops[0].stack.item == Item.wool && loaded.drops[0].stack.count == 2)
+    // Changed chunks load from disk instead of being generated
+    assert(loaded.world.saved.has(chunk_key(0, 0)) && loaded.world.saved.has(chunk_key(-1, -1)))
+    loaded.world.update(0, 0, 1000)
+    assert(loaded.world.block(3, 12, 5) == Block.brick)
+    assert(loaded.world.block(-2, 11, -7) == Block.planks)
+    assert(loaded.world.block(3, 9, 5) == Block.stone)
+
+    // A second world with the same name gets a folder of its own
+    assert(new_world_folder(dir, "My World").ends_with("my-world-2"))
+    let fallback = new_world_folder(dir, "  ?? ")
+    assert(fallback.ends_with("world") && !fallback.ends_with("-world"))
+    delete_world(info.folder)
+    assert(list_worlds(dir).length == 0)
+}
+
+test "Player: crouching stays on the edge, and under a low ceiling" {
+    let world = flat_world()
+    world.set_block(4, 9, 4, Block.stone)
+    let player = Player.at(.{ x: 4.5, y: 10, z: 4.5 })
+    player.update(world, 1.0 / 60, false)
+    assert(player.body.on_ground)
+    player.crouch(world, true, 1)
+    assert(player.crouching && player.body.height == CROUCH_HEIGHT.to(f32))
+    // Walking off the only block: the edge holds
+    player.body.edge_guard = true
+    each 0 .. 20 as _ : player.body.move_axis(world, 0, 0.1)
+    assert(player.body.position.x < 5.3 && player.body.position.x > 4.9)
+    player.body.edge_guard = false
+    each 0 .. 20 as _ : player.body.move_axis(world, 0, 0.1)
+    assert(player.body.position.x > 6)
+
+    // A ceiling 1.6 blocks up keeps the player down
+    let low = flat_world()
+    low.set_block(2, 9, 2, Block.stone)
+    low.set_block(2, 11, 2, Block.stone)
+    let under = Player.at(.{ x: 2.5, y: 10, z: 2.5 })
+    under.crouch(low, true, 1)
+    under.crouch(low, false, 1)
+    assert(under.crouching)
+    under.body.position.x = 3.5
+    under.crouch(low, false, 1)
+    assert(!under.crouching && under.body.height == PLAYER_HEIGHT.to(f32))
+}
+
+test "Game: switching to survival mid-air starts a fall there" {
+    let game = test_game(true)
+    game.player = Player.at(.{ x: 4.5, y: 30, z: 4.5 })
+    game.player.flying = true
+    game.set_creative(false)
+    assert(!game.creative && !game.player.flying && game.player.fall_top == 30)
+    assert(game.message == "Game mode: Survival")
+    each 0 .. 240 as _ : game.update_player(1.0 / 60, false)
+    // 20 blocks: 17 damage
+    assert(game.player.health == 3)
+}

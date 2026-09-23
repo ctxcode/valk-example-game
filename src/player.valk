@@ -5,7 +5,10 @@ use valk.math
 
 value PLAYER_HALF_WIDTH (0.3)
 value PLAYER_HEIGHT (1.8)
+value CROUCH_HEIGHT (1.5)
 value EYE_HEIGHT (1.62)
+value CROUCH_EYE_HEIGHT (1.27)
+value CROUCH_SPEED (1.3)
 value GRAVITY (28.0)
 value JUMP_SPEED (8.6)
 value WALK_SPEED (4.4)
@@ -25,6 +28,8 @@ class Body {
     on_ground: bool (false)
     // The last move ran into a wall
     blocked: bool (false)
+    // Keeps it from stepping off an edge (a crouching player)
+    edge_guard: bool (false)
 
     // Moves by the velocity, in steps small enough to never skip a block
     fn move(world: World, dt: f32) {
@@ -47,6 +52,12 @@ class Body {
         else if axis == 1 : moved.y += amount
         else : moved.z += amount
         if !this.collides(world, moved) {
+            // Crouching on the ground: only where there is still ground under the feet
+            if this.edge_guard && axis != 1 && !this.collides(world, moved - raylib.Vector3{ y: 0.6 }) {
+                if axis == 0 : this.velocity.x = 0
+                else : this.velocity.z = 0
+                return
+            }
             this.position = moved
             return
         }
@@ -132,6 +143,9 @@ class Player {
     hurt: f32 (0)
     // The highest point of the current fall
     fall_top: f32 (0)
+    crouching: bool (false)
+    // Eyes move down smoothly when crouching
+    eye_height: f32 (EYE_HEIGHT)
 
     static fn at(position: raylib.Vector3) Player {
         let body = Body{ position: position, half: PLAYER_HALF_WIDTH.to(f32), height: PLAYER_HEIGHT.to(f32) }
@@ -139,7 +153,7 @@ class Player {
     }
 
     fn eye() raylib.Vector3 {
-        return this.body.position + raylib.Vector3{ y: EYE_HEIGHT.to(f32) }
+        return this.body.position + raylib.Vector3{ y: this.eye_height }
     }
 
     fn forward() raylib.Vector3 {
@@ -181,25 +195,27 @@ class Player {
         let wish = raylib.Vector3{}
         let jump = false
         let sprint = false
-        let down = false
+        let crouch = false
         if input {
             if raylib.is_key_down(.w) : wish = wish + flat
             if raylib.is_key_down(.s) : wish = wish - flat
             if raylib.is_key_down(.d) : wish = wish + right
             if raylib.is_key_down(.a) : wish = wish - right
             jump = raylib.is_key_down(.space)
-            sprint = raylib.is_key_down(.left_control) || raylib.is_key_down(.r)
-            down = raylib.is_key_down(.left_shift)
+            sprint = raylib.is_key_down(.left_shift) || raylib.is_key_down(.right_shift)
+            crouch = raylib.is_key_down(.left_control) || raylib.is_key_down(.right_control)
         }
         wish = wish.normalize()
+        this.crouch(world, crouch && !this.flying, dt)
 
         if this.flying {
             let speed = FLY_SPEED.to(f32) * (sprint ? 2 : 1)
             body.velocity = wish.scale(speed)
             if jump : body.velocity.y = speed
-            if down : body.velocity.y = -speed
+            if crouch : body.velocity.y = -speed
         } else {
-            let speed = (sprint ? SPRINT_SPEED : WALK_SPEED).to(f32)
+            let speed = (sprint && !this.crouching ? SPRINT_SPEED : WALK_SPEED).to(f32)
+            if this.crouching : speed = CROUCH_SPEED.to(f32)
             if this.in_water : speed *= 0.55
             // Quick to change direction on the ground, slow in the air
             let grip : f32 = body.on_ground ? 14 : 3
@@ -218,6 +234,7 @@ class Player {
         }
 
         let was_on_ground = body.on_ground
+        body.edge_guard = this.crouching && was_on_ground && !this.in_water
         body.move(world, dt)
 
         // Falls are measured from their highest point; water and flying end them
@@ -229,6 +246,24 @@ class Player {
         }
         if body.position.y > this.fall_top : this.fall_top = body.position.y
         return 0
+    }
+
+    // Ducks down, or stands back up when there is room above
+    fn crouch(world: World, want: bool, dt: f32) {
+        if want && !this.crouching {
+            this.crouching = true
+            this.body.height = CROUCH_HEIGHT.to(f32)
+        } else if !want && this.crouching {
+            this.body.height = PLAYER_HEIGHT.to(f32)
+            if this.body.collides(world, this.body.position) {
+                this.body.height = CROUCH_HEIGHT.to(f32)
+            } else {
+                this.crouching = false
+            }
+        }
+        let target = (this.crouching ? CROUCH_EYE_HEIGHT : EYE_HEIGHT).to(f32)
+        let blend : f32 = dt * 12 > 1 ? 1 : dt * 12
+        this.eye_height += (target - this.eye_height) * blend
     }
 
     // Eyes under water: breath runs out, then it hurts. Returns the damage of this frame.

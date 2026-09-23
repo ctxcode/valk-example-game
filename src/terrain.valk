@@ -91,7 +91,31 @@ class Terrain {
                 }
             }
         }
+        this.place_ores(chunk)
         this.plant_trees(chunk)
+    }
+
+    // Iron ore: short veins wandering through the stone, deeper than the surface
+    fn place_ores(chunk: Chunk) {
+        let h = hash_position(this.seed * 13 + 5, chunk.cx, chunk.cz)
+        let veins = 6 + (h % 5).to(int)
+        each 0 .. veins as v {
+            let r = hash_position(h, v, 77)
+            let x = (r % 16).to(int)
+            let z = ((r >> 8) % 16).to(int)
+            let y = 4 + ((r >> 16) % 50).to(int)
+            let length = 3 + ((r >> 24) % 6).to(int)
+            each 0 .. length as step {
+                if chunk_inside(x, y, z) && chunk.get(x, y, z) == Block.stone : chunk.set(x, y, z, Block.iron_ore)
+                let turn = hash_position(r, step, 3) % 6
+                if turn == 0 : x++
+                else if turn == 1 : x--
+                else if turn == 2 : y++
+                else if turn == 3 : y--
+                else if turn == 4 : z++
+                else : z--
+            }
+        }
     }
 
     // Trees within reach of the chunk, including those rooted in the chunks around it

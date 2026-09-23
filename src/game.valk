@@ -3,6 +3,8 @@
 
 use raylib
 use valk.math
+use valk.fs
+use valk.json
 
 value REACH (5.0)
 value MOB_LIMIT (40)
@@ -45,6 +47,14 @@ class Game {
     // The mouse button that clicked a menu away is still down: it does nothing in the
     // world until it is let go
     mouse_blocked: bool (false)
+    // Its name, and the folder it is saved in ("": not saved)
+    name: String ("World")
+    folder: String ("")
+    created: int (0)
+    save_timer: f32 (0)
+    // A line shown for a moment in the middle of the screen
+    message: String ("")
+    message_time: f32 (0)
 
     static fn new(seed: uint, creative: bool, distance: int) Game {
         let world = World.new(seed, distance)
@@ -56,6 +66,94 @@ class Game {
         game.player.yaw = 0.8
         game.player.pitch = -0.2
         return game
+    }
+
+    // A saved world as it was left
+    static fn load(info: WorldInfo, distance: int) Game {
+        let game = Game.new(info.seed, info.creative, distance)
+        game.name = info.name
+        game.folder = info.folder
+        game.created = info.created
+        game.world.folder = info.folder
+        game.world.saved = saved_chunks(info.folder)
+        game.spawn = raylib.Vector3{ x: info.spawn_x, y: info.spawn_y, z: info.spawn_z }
+        if info.health > 0 {
+            game.player = Player.at(.{ x: info.x, y: info.y, z: info.z })
+            game.player.yaw = info.yaw
+            game.player.pitch = info.pitch
+            game.player.health = info.health
+            game.player.flying = info.flying && info.creative
+        } else {
+            game.player = Player.at(game.spawn)
+        }
+        game.selected = info.selected < HOTBAR_SIZE ? info.selected : 0
+        each info.inventory as saved, i {
+            if i < INVENTORY_SIZE : game.inventory.set(i, loaded_stack(saved))
+        }
+        each info.drops as saved {
+            let stack = loaded_stack(SavedStack{ item: saved.item, count: saved.count, wear: saved.wear })
+            if !is_empty(stack) : game.drops.append(Drop.at(stack, .{ x: saved.x, y: saved.y, z: saved.z }, .{}))
+        }
+        return game
+    }
+
+    fn info() WorldInfo {
+        let p = this.player.body.position
+        let info = WorldInfo{
+            name: this.name
+            seed: this.seed
+            creative: this.creative
+            created: this.created
+            played: now_seconds()
+            yaw: this.player.yaw
+            pitch: this.player.pitch
+            health: this.dead ? 0 : this.player.health
+            flying: this.player.flying
+            selected: this.selected
+            spawn_x: this.spawn.x
+            spawn_y: this.spawn.y
+            spawn_z: this.spawn.z
+        }
+        // Not in the literal: a field named `x` on its own line reads as the fill form `{ v x n }`
+        info.x = p.x
+        info.y = p.y
+        info.z = p.z
+        each this.inventory.slots as stack : info.inventory.append(saved_stack(stack))
+        each this.drops as drop {
+            let stack = drop.stack
+            let at = drop.body.position
+            info.drops.append(SavedDrop{ item: stack.item.to(uint), count: stack.count.to(uint), wear: stack.wear.to(uint), x: at.x, y: at.y, z: at.z })
+        }
+        return info
+    }
+
+    // Writes the world's file and the chunks changed since the last save
+    fn save() {
+        this.save_timer = 0
+        if this.folder.bytes == 0 : return
+        make_dirs(this.folder)
+        fs.write(fs.add(this.folder, "world.json"), json.encode(this.info(), true)) _
+        each this.world.chunks as chunk {
+            if !chunk.unsaved : continue
+            save_chunk(this.folder, chunk)
+            chunk.unsaved = false
+            this.world.saved.set(chunk_key(chunk.cx, chunk.cz), true)
+        }
+    }
+
+    fn toast(text: String) {
+        this.message = text
+        this.message_time = 2.5
+    }
+
+    fn set_creative(on: bool) {
+        this.creative = on
+        if !on {
+            // Falling from here on counts
+            this.player.flying = false
+            this.player.fall_top = this.player.body.position.y
+        }
+        this.toast("Game mode: " + (on ? "Creative" : "Survival"))
     }
 
     fn held() Stack {
@@ -81,6 +179,10 @@ class Game {
         if !this.dead : this.update_player(dt, input)
         this.update_mobs(dt)
         this.update_drops(dt)
+        if this.message_time > 0 : this.message_time -= dt
+        // Saves every half minute while played
+        this.save_timer += dt
+        if this.save_timer >= 30 && input : this.save()
         if this.break_cooldown > 0 : this.break_cooldown -= dt
         if this.use_cooldown > 0 : this.use_cooldown -= dt
         if this.attack_cooldown > 0 : this.attack_cooldown -= dt
@@ -304,7 +406,8 @@ class Game {
     // Right click: open a crafting table, eat, or place a block
     fn use(target: ?RayHit) {
         let held = this.held()
-        if isset(target) && target.block == Block.crafting_table && !raylib.is_key_down(.left_shift) {
+        // Crouching places a block against the table instead
+        if isset(target) && target.block == Block.crafting_table && !this.player.crouching {
             this.wants_table = true
             this.use_cooldown = 0.3
             return

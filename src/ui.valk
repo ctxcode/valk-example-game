@@ -11,6 +11,9 @@ class Ui {
     shift: bool (false)
     // The name to show next to the mouse, set by a slot it is over
     tooltip: String ("")
+    // A second click soon after the first
+    double_click: bool (false)
+    last_click: f64 (0)
 
     fn begin() {
         this.mouse = raylib.get_mouse_position()
@@ -18,6 +21,12 @@ class Ui {
         this.right_clicked = raylib.is_mouse_button_pressed(.right)
         this.shift = raylib.is_key_down(.left_shift) || raylib.is_key_down(.right_shift)
         this.tooltip = ""
+        this.double_click = false
+        if this.clicked {
+            let now = raylib.get_time()
+            this.double_click = now - this.last_click < 0.35
+            this.last_click = now
+        }
     }
 
     fn over(x: i32, y: i32, w: i32, h: i32) bool {

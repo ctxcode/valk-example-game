@@ -21,6 +21,15 @@ enum Block : u8 {
     iron_ore
 }
 
+// Every block in the order of the enum: a block's number is its place here
+fn all_blocks() Array[Block] {
+    return Array[Block]{
+        Block.air, Block.grass, Block.dirt, Block.stone, Block.cobblestone, Block.sand, Block.water
+        Block.log, Block.leaves, Block.planks, Block.glass, Block.bedrock, Block.snow, Block.brick
+        Block.gravel, Block.crafting_table, Block.wool, Block.iron_ore
+    }
+}
+
 enum Tool : u8 {
     none
     pickaxe

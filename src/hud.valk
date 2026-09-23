@@ -65,8 +65,8 @@ fn draw_info(game: Game) {
     text_shadowed(raylib.get_fps() + " fps   " + game.world.chunks.length + " chunks   " + game.mobs.length + " animals", 14, 46, 18, light)
     text_shadowed("x " + whole(p.x) + "  y " + whole(p.y) + "  z " + whole(p.z), 14, 68, 18, light)
     let mode = game.creative ? "creative" : "survival"
-    let moving = game.player.flying ? "flying" : (game.player.in_water ? "swimming" : "walking")
-    text_shadowed(mode + ", " + moving, 14, 90, 18, light)
+    let moving = game.player.flying ? "flying" : (game.player.in_water ? "swimming" : (game.player.crouching ? "crouching" : "walking"))
+    text_shadowed(game.name + ": " + mode + ", " + moving, 14, 90, 18, light)
     let target = game.target
     let mob = game.target_mob
     if isset(mob) {
@@ -80,11 +80,12 @@ fn draw_info(game: Game) {
 fn draw_help(creative: bool) {
     let lines = Array[String]{
         "WASD  move      Space  jump / swim up",
-        "Mouse  look     Ctrl or R  sprint",
+        "Mouse  look     Shift  sprint    Ctrl  crouch",
         "Left  break / hit    Right  place / eat / use",
         "1-9 or wheel  pick    E  inventory    Q  drop",
-        creative ? "F  fly (Space up, Shift down)" : "Right click a crafting table for 3x3",
-        "F2  screenshot    Esc  menu    H  hide this",
+        creative ? "F  fly (Space up, Ctrl down)" : "Right click a crafting table for 3x3",
+        "F4  creative / survival    F2  screenshot",
+        "Esc  menu    H  hide this",
     }
     let y : i32 = 12
     each lines as line {
@@ -92,6 +93,12 @@ fn draw_help(creative: bool) {
         text_shadowed(line, screen_width() - w - 14, y, 16, raylib.Color.rgb(235, 235, 235))
         y += 20
     }
+}
+
+fn draw_message(game: Game) {
+    if game.message_time <= 0 : return
+    let alpha = game.message_time > 0.5 ? 255 : (game.message_time * 2 * 255).to(int)
+    text_centered_shadowed(game.message, screen_width() / 2, screen_height() / 2 - 120, 24, raylib.Color.rgba(255, 255, 255, alpha.to(u8)))
 }
 
 fn draw_overlays(game: Game, camera: raylib.Camera3D) {

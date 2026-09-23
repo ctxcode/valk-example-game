@@ -14,6 +14,9 @@ class World {
     ring_z: Array[int] (.{})
     // Chunks generated since the game last looked, to put animals in
     fresh: Array[Chunk] (.{})
+    // The world's folder, and the chunks saved in it: those load instead of being generated
+    folder: String ("")
+    saved: HashMap[int, bool] (.{})
 
     static fn new(seed: uint, radius: int) World {
         let world = World{ terrain: Terrain.new(seed), radius: radius }
@@ -59,6 +62,7 @@ class World {
         let lz = floor_mod(z, CHUNK_SIZE)
         chunk.set(lx, y, lz, block)
         chunk.edited = true
+        chunk.unsaved = true
         chunk.dirty = true
         // Faces and shading on the other side of a border change too
         let dx = -1
@@ -92,7 +96,11 @@ class World {
                 ready = false
                 if generated >= budget : continue
                 let chunk = Chunk{ cx: x, cz: z }
-                this.terrain.generate(chunk)
+                if this.saved.has(chunk_key(x, z)) && load_chunk(this.folder, chunk) {
+                    chunk.edited = true
+                } else {
+                    this.terrain.generate(chunk)
+                }
                 this.chunks.set(chunk_key(x, z), chunk)
                 this.fresh.append(chunk)
                 generated++

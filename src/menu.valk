@@ -5,6 +5,7 @@ use valk.math
 
 enum MenuAction : u8 {
     none
+    open_worlds
     open_create
     create
     back
@@ -13,6 +14,15 @@ enum MenuAction : u8 {
     respawn
     to_title
     toggle_mode
+    play
+    delete
+    confirm
+}
+
+// Which text field of the new world screen takes the keys
+enum Field : u8 {
+    name
+    seed
 }
 
 fn draw_logo(time: f32) {
@@ -42,7 +52,7 @@ fn title_screen(ui: Ui, time: f32) MenuAction {
     let x = (w - bw) / 2
     let y = h / 2 + 10
     let action = MenuAction.none
-    if ui.button("Create New World", x, y, bw, 48) : action = MenuAction.open_create
+    if ui.button("Singleplayer", x, y, bw, 48) : action = MenuAction.open_worlds
     if ui.button("Quit Game", x, y + 64, bw, 48) : action = MenuAction.quit
     text_shadowed("Valkcraft, with raylib " + raylib.RAYLIB_VERSION, 10, h - 28, 18, raylib.WHITE)
     let credit = "Written in Valk"
@@ -50,45 +60,117 @@ fn title_screen(ui: Ui, time: f32) MenuAction {
     return action
 }
 
-fn create_screen(ui: Ui, seed_text: String, creative: bool, time: f32) MenuAction {
+// The saved worlds, the last played first; `selected` is an index into `worlds`
+fn worlds_screen(ui: Ui, worlds: Array[WorldInfo], selected: uint, scroll: uint) (MenuAction, uint) {
+    let w = screen_width()
+    let h = screen_height()
+    raylib.draw_rectangle(0, 0, w, h, raylib.Color.rgba(0, 0, 0, 120))
+    text_centered_shadowed("Select World", w / 2, 24, 30, raylib.WHITE)
+    let lw : i32 = 560
+    let x = (w - lw) / 2
+    let top : i32 = 70
+    let bottom = h - 140
+    let row : i32 = 68
+    raylib.draw_rectangle(0, top, w, bottom - top, raylib.Color.rgba(0, 0, 0, 110))
+    let action = MenuAction.none
+    let pick = selected
+    if worlds.length == 0 {
+        text_centered_shadowed("No worlds yet: make one with Create New World", w / 2, top + 40, 20, raylib.Color.rgb(200, 200, 200))
+    }
+    let visible = ((bottom - top - 8) / row).to(uint)
+    each worlds as world, i {
+        if i < scroll || i >= scroll + visible : continue
+        let y = top + 8 + (i - scroll).to(i32) * row
+        let hot = ui.over(x, y, lw, row - 6)
+        if i == selected {
+            raylib.draw_rectangle(x - 2, y - 2, lw + 4, row - 2, raylib.Color.rgb(200, 200, 200))
+            raylib.draw_rectangle(x, y, lw, row - 6, raylib.BLACK)
+        } else if hot {
+            raylib.draw_rectangle(x, y, lw, row - 6, raylib.Color.rgba(255, 255, 255, 30))
+        }
+        text_shadowed(world.name, x + 12, y + 8, 22, raylib.WHITE)
+        let about = (world.creative ? "Creative" : "Survival") + ", seed " + world.seed + ", played " + played_text(world.played)
+        text_shadowed(about, x + 12, y + 36, 18, raylib.Color.rgb(160, 160, 160))
+        if hot && ui.clicked {
+            if i == selected && ui.double_click : action = MenuAction.play
+            pick = i
+        }
+    }
+
+    let bw : i32 = 272
+    let bx = w / 2 - bw - 8
+    let has = worlds.length > 0
+    if ui.button("Play Selected World", bx, h - 124, bw, 44) && has : action = MenuAction.play
+    if ui.button("Create New World", bx + bw + 16, h - 124, bw, 44) : action = MenuAction.open_create
+    if ui.button("Delete", bx, h - 70, bw, 44) && has : action = MenuAction.delete
+    if ui.button("Back", bx + bw + 16, h - 70, bw, 44) : action = MenuAction.back
+    if raylib.is_key_pressed(.escape) : action = MenuAction.back
+    if raylib.is_key_pressed(.enter) && has : action = MenuAction.play
+    return (action, pick)
+}
+
+fn delete_screen(ui: Ui, world: WorldInfo) MenuAction {
+    let w = screen_width()
+    let h = screen_height()
+    raylib.draw_rectangle(0, 0, w, h, raylib.Color.rgba(60, 0, 0, 170))
+    text_centered_shadowed("Delete this world?", w / 2, h / 2 - 110, 30, raylib.WHITE)
+    text_centered_shadowed("'" + world.name + "' will be lost forever, a long time!", w / 2, h / 2 - 60, 20, raylib.Color.rgb(230, 230, 230))
+    let bw : i32 = 220
+    let action = MenuAction.none
+    if ui.button("Delete", w / 2 - bw - 8, h / 2, bw, 48) : action = MenuAction.confirm
+    if ui.button("Cancel", w / 2 + 8, h / 2, bw, 48) : action = MenuAction.back
+    if raylib.is_key_pressed(.escape) : action = MenuAction.back
+    return action
+}
+
+fn create_screen(ui: Ui, name: String, seed_text: String, focus: Field, creative: bool, time: f32) (MenuAction, Field) {
     let w = screen_width()
     let h = screen_height()
     raylib.draw_rectangle(0, 0, w, h, raylib.Color.rgba(0, 0, 0, 110))
-    text_centered_shadowed("Create New World", w / 2, 60, 36, raylib.WHITE)
+    text_centered_shadowed("Create New World", w / 2, 50, 36, raylib.WHITE)
     let fw : i32 = 440
     let x = (w - fw) / 2
-    let y = h / 2 - 150
-    text_shadowed("Seed for the world generator", x, y, 20, raylib.Color.rgb(200, 200, 200))
+    let y = h / 2 - 200
     let blink = math.mod(time.to(float), 1) < 0.5
-    ui.text_field(seed_text, x, y + 28, fw, 44, blink)
-    text_shadowed("Leave it empty for a random seed", x, y + 80, 18, raylib.Color.rgb(160, 160, 160))
+    let field = focus
+
+    text_shadowed("World Name", x, y, 20, raylib.Color.rgb(200, 200, 200))
+    ui.text_field(name, x, y + 28, fw, 44, blink && focus == Field.name)
+    if ui.clicked && ui.over(x, y + 28, fw, 44) : field = Field.name
+
+    let sy = y + 100
+    text_shadowed("Seed for the world generator", x, sy, 20, raylib.Color.rgb(200, 200, 200))
+    ui.text_field(seed_text, x, sy + 28, fw, 44, blink && focus == Field.seed)
+    if ui.clicked && ui.over(x, sy + 28, fw, 44) : field = Field.seed
+    text_shadowed("Leave it empty for a random seed", x, sy + 80, 18, raylib.Color.rgb(160, 160, 160))
+    if raylib.is_key_pressed(.tab) : field = focus == Field.name ? Field.seed : Field.name
 
     let action = MenuAction.none
-    if ui.button("Game Mode: " + (creative ? "Creative" : "Survival"), x, y + 130, fw, 48) : action = MenuAction.toggle_mode
+    if ui.button("Game Mode: " + (creative ? "Creative" : "Survival"), x, sy + 120, fw, 48) : action = MenuAction.toggle_mode
     let about = creative ? "Every block, flying, nothing can hurt you" : "Gather, craft tools, hunt, and stay alive"
-    text_centered_shadowed(about, w / 2, y + 190, 18, raylib.Color.rgb(200, 200, 200))
+    text_centered_shadowed(about, w / 2, sy + 180, 18, raylib.Color.rgb(200, 200, 200))
 
     let bw = (fw - 16) / 2
-    if ui.button("Create New World", x, h - 110, bw, 48) : action = MenuAction.create
-    if ui.button("Cancel", x + bw + 16, h - 110, bw, 48) : action = MenuAction.back
+    if ui.button("Create New World", x, h - 100, bw, 48) : action = MenuAction.create
+    if ui.button("Cancel", x + bw + 16, h - 100, bw, 48) : action = MenuAction.back
     if raylib.is_key_pressed(.enter) : action = MenuAction.create
     if raylib.is_key_pressed(.escape) : action = MenuAction.back
-    return action
+    return (action, field)
 }
 
 fn pause_screen(ui: Ui, game: Game) MenuAction {
     let w = screen_width()
     let h = screen_height()
     raylib.draw_rectangle(0, 0, w, h, raylib.Color.rgba(0, 0, 0, 140))
-    text_centered_shadowed("Game Menu", w / 2, h / 2 - 140, 36, raylib.WHITE)
+    text_centered_shadowed("Game Menu", w / 2, h / 2 - 170, 36, raylib.WHITE)
     let bw : i32 = 400
     let x = (w - bw) / 2
     let action = MenuAction.none
-    if ui.button("Back to Game", x, h / 2 - 60, bw, 48) : action = MenuAction.resume
-    if ui.button("Quit to Title", x, h / 2 + 4, bw, 48) : action = MenuAction.to_title
-    let about = (game.creative ? "Creative" : "Survival") + " world, seed " + game.seed
-    text_centered_shadowed(about, w / 2, h / 2 + 80, 18, raylib.Color.rgb(200, 200, 200))
-    text_centered_shadowed("The world is not saved when you quit", w / 2, h / 2 + 104, 18, raylib.Color.rgb(160, 160, 160))
+    if ui.button("Back to Game", x, h / 2 - 90, bw, 48) : action = MenuAction.resume
+    if ui.button("Game Mode: " + (game.creative ? "Creative" : "Survival"), x, h / 2 - 26, bw, 48) : action = MenuAction.toggle_mode
+    if ui.button("Save and Quit to Title", x, h / 2 + 38, bw, 48) : action = MenuAction.to_title
+    let about = game.name + ", seed " + game.seed
+    text_centered_shadowed(about, w / 2, h / 2 + 110, 18, raylib.Color.rgb(200, 200, 200))
     return action
 }
 

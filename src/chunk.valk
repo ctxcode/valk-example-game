@@ -14,8 +14,10 @@ class Chunk {
     has_water: bool (false)
     // The meshes are missing or out of date
     dirty: bool (true)
-    // Changed by the player: kept when the player walks away
+    // Changed by the player: kept when the player walks away, and saved
     edited: bool (false)
+    // Changed since the last save
+    unsaved: bool (false)
 
     fn get(x: int, y: int, z: int) Block {
         return this.blocks[chunk_index(x, y, z)]

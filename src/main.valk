@@ -5,6 +5,8 @@ use valk.math
 
 enum Screen : u8 {
     title
+    worlds
+    delete
     create
     loading
     playing
@@ -31,6 +33,10 @@ class Options {
     kit: bool (false)
     // One of each animal in front of the player
     animals: bool (false)
+    // Where worlds are saved; the user's data folder when empty
+    saves: String ("")
+    // The screenshot is of the world list
+    worlds: bool (false)
     // Play this many frames once loaded, print the frame rate and quit
     frames: int (0)
     // Where to start and where to look, in degrees
@@ -69,6 +75,8 @@ fn parse_options(args: Array[String]) Options {
                 o.at_x = parts[0].to(int) !? null
                 o.at_z = parts[1].to(int) !? null
             }
+        } else if arg == "--saves" {
+            o.saves = next
         } else if arg == "--frames" {
             o.frames = next.to(int) !? 0
             o.play = true
@@ -83,20 +91,21 @@ fn parse_options(args: Array[String]) Options {
             if arg == "--creative" : o.creative = true
             else if arg == "--play" : o.play = true
             else if arg == "--title" : o.title = true
+            else if arg == "--worlds" : o.worlds = true
             else if arg == "--inventory" : o.inventory = true
             else if arg == "--hud" : o.hud = true
             else if arg == "--kit" : o.kit = true
             else if arg == "--animals" : o.animals = true
             else if arg == "--help" || arg == "-h" {
-                println("valkcraft [--seed TEXT] [--creative] [--play] [--distance CHUNKS] [--size WxH]")
-                println("          [--screenshot FILE [--title] [--inventory] [--hud]] [--kit] [--animals] [--at X,Z] [--up N] [--yaw DEG] [--pitch DEG]")
+                println("valkcraft [--saves DIR] [--seed TEXT] [--creative] [--play] [--distance CHUNKS] [--size WxH]")
+                println("          [--screenshot FILE [--title] [--worlds] [--inventory] [--hud]] [--kit] [--animals] [--at X,Z] [--up N] [--yaw DEG] [--pitch DEG]")
                 exit(0)
             }
         }
         if takes : i++
         i++
     }
-    if o.screenshot.bytes > 0 && !o.title {
+    if o.screenshot.bytes > 0 && !o.title && !o.worlds {
         o.play = true
         // The same world every time, unless asked otherwise
         if !isset(o.seed) : o.seed = 1337
@@ -114,7 +123,13 @@ class App {
     // The world behind the menus
     panorama: ?World (null)
     time: f32 (0)
+    // The world list, and the new world screen
+    saves: String
+    worlds: Array[WorldInfo] (.{})
+    selected: uint (0)
+    name_text: String ("New World")
     seed_text: String ("")
+    focus: Field (Field.name)
     creative: bool (false)
     show_help: bool (true)
     screenshots: int (0)
@@ -136,14 +151,25 @@ class App {
         this.screen = screen
     }
 
-    fn start_game(seed: uint, creative: bool) {
+    fn close_panorama() {
         let panorama = this.panorama
         if isset(panorama) {
             panorama.unload()
             this.panorama = null
         }
+    }
+
+    // A new world; saved right away unless it is only for a screenshot or a benchmark
+    fn start_game(name: String, seed: uint, creative: bool) {
+        this.close_panorama()
         let game = Game.new(seed, creative, this.options.distance)
         let o = this.options
+        game.name = name.trim(" ").bytes > 0 ? name.trim(" ") : "New World"
+        game.created = now_seconds()
+        if o.screenshot.bytes == 0 && o.frames <= 0 {
+            game.folder = new_world_folder(this.saves, game.name)
+            game.world.folder = game.folder
+        }
         let at_x = o.at_x
         let at_z = o.at_z
         if isset(at_x) && isset(at_z) {
@@ -176,19 +202,43 @@ class App {
                 game.mobs.append(mob)
             }
         }
+        game.save()
+        this.play(game)
+    }
+
+    fn load_world(info: WorldInfo) {
+        this.close_panorama()
+        this.play(Game.load(info, this.options.distance))
+    }
+
+    fn play(game: Game) {
         this.game = game
-        let view = (o.distance * CHUNK_SIZE).to(f32)
+        let view = (this.options.distance * CHUNK_SIZE).to(f32)
         this.res.set_fog(sky_color(), view * 0.55, view * 0.95)
         this.go(Screen.loading)
+    }
+
+    // Saves what is being played, e.g. before quitting
+    fn save_game() {
+        let game = this.game ?! return
+        game.return_grid()
+        game.save()
     }
 
     fn to_title() {
         let game = this.game
         if isset(game) {
+            this.save_game()
             game.unload()
             this.game = null
         }
         this.go(Screen.title)
+    }
+
+    fn open_worlds() {
+        this.worlds = list_worlds(this.saves)
+        this.selected = 0
+        this.screen = Screen.worlds
     }
 
     fn panorama_world() World {
@@ -204,7 +254,7 @@ class App {
         this.time += dt
         this.ui.begin()
         let screen = this.screen
-        if screen == Screen.title || screen == Screen.create {
+        if screen == Screen.title || screen == Screen.worlds || screen == Screen.delete || screen == Screen.create {
             this.menu_frame(dt)
             return
         }
@@ -257,21 +307,43 @@ class App {
         this.clouds.draw(camera, this.time, 7 * 16 * 1.3)
         raylib.end_mode_3d()
 
-        if this.screen == Screen.title {
+        let screen = this.screen
+        if screen == Screen.title {
             let action = title_screen(this.ui, this.time)
+            if action == MenuAction.open_worlds : this.open_worlds()
+            if action == MenuAction.quit : this.quit = true
+        } else if screen == Screen.worlds {
+            let action, selected = worlds_screen(this.ui, this.worlds, this.selected, this.scroll())
+            this.selected = selected
+            if action == MenuAction.back : this.screen = Screen.title
+            if action == MenuAction.delete : this.screen = Screen.delete
             if action == MenuAction.open_create {
+                this.name_text = "New World"
                 this.seed_text = ""
+                this.focus = Field.name
                 this.screen = Screen.create
             }
-            if action == MenuAction.quit : this.quit = true
+            if action == MenuAction.play {
+                raylib.end_drawing()
+                this.load_world(this.worlds[this.selected])
+                return
+            }
+        } else if screen == Screen.delete {
+            let action = delete_screen(this.ui, this.worlds[this.selected])
+            if action == MenuAction.confirm {
+                delete_world(this.worlds[this.selected].folder)
+                this.open_worlds()
+            }
+            if action == MenuAction.back : this.screen = Screen.worlds
         } else {
-            this.type_seed()
-            let action = create_screen(this.ui, this.seed_text, this.creative, this.time)
+            this.type_text()
+            let action, focus = create_screen(this.ui, this.name_text, this.seed_text, this.focus, this.creative, this.time)
+            this.focus = focus
             if action == MenuAction.toggle_mode : this.creative = !this.creative
-            if action == MenuAction.back : this.screen = Screen.title
+            if action == MenuAction.back : this.open_worlds()
             if action == MenuAction.create {
                 raylib.end_drawing()
-                this.start_game(seed_from_text(this.seed_text), this.creative)
+                this.start_game(this.name_text, seed_from_text(this.seed_text), this.creative)
                 return
             }
         }
@@ -280,26 +352,37 @@ class App {
             this.screenshots++
             raylib.take_screenshot("valkcraft-" + this.screenshots + ".png")
         }
-        if this.options.title && this.options.screenshot.bytes > 0 && this.time > 1.5 {
+        if (this.options.title || this.options.worlds) && this.options.screenshot.bytes > 0 && this.time > 1.5 {
             this.save_screenshot()
             this.quit = true
         }
     }
 
-    fn type_seed() {
+    // Keeps the selected world in the list's view
+    fn scroll() uint {
+        let visible = ((screen_height() - 140 - 70 - 8) / 68).to(uint)
+        if visible == 0 || this.selected < visible : return 0
+        return this.selected + 1 - visible
+    }
+
+    // Typing into the focused field of the new world screen
+    fn type_text() {
+        let text = this.focus == Field.name ? this.name_text : this.seed_text
         let ch = raylib.get_char_pressed()
         while ch > 0 {
-            if ch >= 32 && ch < 127 && this.seed_text.bytes < 32 {
-                let buf = ByteBuffer.new(this.seed_text.bytes + 1)
-                buf.write(this.seed_text)
+            if ch >= 32 && ch < 127 && text.bytes < 32 {
+                let buf = ByteBuffer.new(text.bytes + 1)
+                buf.write(text)
                 buf.write_byte(ch.to(u8))
-                this.seed_text = buf.to_string()
+                text = buf.to_string()
             }
             ch = raylib.get_char_pressed()
         }
-        if (raylib.is_key_pressed(.backspace) || raylib.is_key_pressed_repeat(.backspace)) && this.seed_text.bytes > 0 {
-            this.seed_text = this.seed_text.range(0, this.seed_text.bytes - 1)
+        if (raylib.is_key_pressed(.backspace) || raylib.is_key_pressed_repeat(.backspace)) && text.bytes > 0 {
+            text = text.range(0, text.bytes - 1)
         }
+        if this.focus == Field.name : this.name_text = text
+        else : this.seed_text = text
     }
 
     fn game_frame(game: Game, dt: f32) {
@@ -312,7 +395,10 @@ class App {
                 game.player.look(raylib.get_mouse_delta())
             }
             game.handle_input(dt)
-            if raylib.is_key_pressed(.escape) : this.go(Screen.paused)
+            if raylib.is_key_pressed(.escape) {
+                this.save_game()
+                this.go(Screen.paused)
+            }
             else if raylib.is_key_pressed(.e) {
                 game.craft_size = 2
                 this.go(Screen.inventory)
@@ -322,6 +408,7 @@ class App {
             }
             game.wants_table = false
             if raylib.is_key_pressed(.h) : this.show_help = !this.show_help
+            if raylib.is_key_pressed(.f4) : game.set_creative(!game.creative)
         } else if screen == Screen.inventory {
             if raylib.is_key_pressed(.e) || raylib.is_key_pressed(.escape) {
                 game.return_grid()
@@ -361,6 +448,7 @@ class App {
             draw_hotbar(this.ui, game)
             if !game.creative : draw_health(this.res, game)
             draw_info(game)
+            draw_message(game)
             if this.show_help && this.screen == Screen.playing : draw_help(game.creative)
         }
         if this.screen == Screen.inventory {
@@ -368,6 +456,7 @@ class App {
         } else if this.screen == Screen.paused && screen == Screen.paused {
             let action = pause_screen(this.ui, game)
             if action == MenuAction.resume : this.go(Screen.playing)
+            if action == MenuAction.toggle_mode : game.set_creative(!game.creative)
             if action == MenuAction.to_title {
                 raylib.end_drawing()
                 this.to_title()
@@ -436,10 +525,11 @@ fn main(args: Array[String]) {
     raylib.set_exit_key(.none)
 
     let res = Resources.load()
-    let app = App{ res: res, ui: Ui{ res: res }, options: options, clouds: Clouds{ noise: Noise.new(99) }, creative: options.creative }
+    let app = App{ res: res, ui: Ui{ res: res }, options: options, clouds: Clouds{ noise: Noise.new(99) }, creative: options.creative, saves: saves_dir(options.saves) }
+    if options.worlds : app.open_worlds()
     if options.play {
         let seed = options.seed
-        app.start_game(isset(seed) ? seed : seed_from_text(""), options.creative)
+        app.start_game("New World", isset(seed) ? seed : seed_from_text(""), options.creative)
     }
     while !raylib.window_should_close() && !app.quit {
         let dt = raylib.get_frame_time()
@@ -448,7 +538,11 @@ fn main(args: Array[String]) {
         app.frame(dt)
     }
     let game = app.game
-    if isset(game) : game.unload()
+    if isset(game) {
+        // Closing the window saves too
+        app.save_game()
+        game.unload()
+    }
     let panorama = app.panorama
     if isset(panorama) : panorama.unload()
 }
