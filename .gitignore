@@ -3,3 +3,4 @@ vendor
 valkcraft
 valkcraft.exe
 valkcraft-*.png
+local.mk

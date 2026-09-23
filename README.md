@@ -10,18 +10,20 @@ forests and mountains to walk around in and build on, with caves below to dig in
 
 ## Play
 
-It needs Valk 0.7.7 or newer and raylib 6.0 (`pacman -S raylib`, `brew install raylib`, or
-the library from raylib's [release page](https://github.com/raysan5/raylib/releases/tag/6.0)).
-See [valk-raylib](https://github.com/ctxcode/valk-raylib#requirements) for each system.
+It needs Valk 0.7.7 or newer, and raylib 6.0. With raylib installed (`pacman -S raylib`,
+`brew install raylib`, see [valk-raylib](https://github.com/ctxcode/valk-raylib#requirements))
+it uses that one; otherwise `make deps` downloads raylib's own build of it into
+`vendor/raylib`.
 
 ```sh
 git clone https://github.com/ctxcode/valk-example-game
 cd valk-example-game
-make deps       # vman install: fetches valk-raylib
+make deps       # valk-raylib, and raylib when the system has none
 make run
 ```
 
-With raylib unpacked somewhere instead of installed: `make run RAYLIB_LIB=~/raylib-6.0_linux_amd64/lib`.
+To build with a compiler of your own, put `vc := ~/path/to/valk` in a file `local.mk`
+(git ignores it), or run `make run vc=~/path/to/valk`.
 
 | key | |
 | --- | --- |
