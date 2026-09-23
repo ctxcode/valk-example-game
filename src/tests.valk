@@ -1,0 +1,229 @@
+// `valk build . --test`: the world, physics and meshing, without a window
+
+use raylib
+
+fn flat_world() World {
+    let world = World.new(1, 2)
+    world.mesher.upload = false
+    let cz = -1
+    while cz <= 1 {
+        let cx = -1
+        while cx <= 1 {
+            world.chunks.set(chunk_key(cx, cz), Chunk{ cx: cx, cz: cz })
+            cx++
+        }
+        cz++
+    }
+    return world
+}
+
+test "Noise: seeded and smooth" {
+    let a = Noise.new(42)
+    let b = Noise.new(42)
+    let c = Noise.new(43)
+    assert(a.noise2(1.5, 2.25) == b.noise2(1.5, 2.25))
+    assert(a.noise2(1.5, 2.25) != c.noise2(1.5, 2.25))
+    assert(a.noise2(3, 7) == 0)
+    let x : float = 0
+    let low : float = 0
+    let high : float = 0
+    while x < 50 {
+        let v = a.fbm2(x, x * 0.7, 4)
+        if v < low : low = v
+        if v > high : high = v
+        x += 0.37
+    }
+    assert(low > -1.5 && high < 1.5 && high - low > 0.2)
+}
+
+test "Terrain: layers, sea and trees" {
+    let terrain = Terrain.new(1337)
+    let chunk = Chunk{ cx: 3, cz: -2 }
+    terrain.generate(chunk)
+    let checked : uint = 0
+    each 0 .. 16 as z {
+        each 0 .. 16 as x {
+            assert(chunk.get(x, 0, z) == Block.bedrock)
+            let surface = terrain.height(3 * 16 + x, -2 * 16 + z)
+            assert(surface > 0 && surface < WORLD_HEIGHT)
+            let top = chunk.get(x, surface, z)
+            if top == Block.grass || top == Block.sand || top == Block.snow || top == Block.stone || top == Block.gravel || top == Block.dirt : checked++
+            if surface < SEA_LEVEL : assert(chunk.get(x, SEA_LEVEL, z) == Block.water)
+            assert(chunk.get(x, WORLD_HEIGHT - 1, z) == Block.air)
+        }
+    }
+    // Only trees and caves change the top block
+    assert(checked > 200)
+
+    // The same seed makes the same chunk
+    let again = Chunk{ cx: 3, cz: -2 }
+    terrain.generate(again)
+    let same = true
+    each chunk.blocks as block, i {
+        if again.blocks[i] != block : same = false
+    }
+    assert(same)
+}
+
+test "Terrain: a tree on a chunk border is whole on both sides" {
+    let terrain = Terrain.new(1337)
+    // Find a tree whose leaves reach into the next chunk
+    let found = false
+    let x = 15
+    while x < 4000 && !found {
+        let z = 0
+        while z < 64 && !found {
+            if terrain.tree_at(x, z, terrain.height(x, z)) > 0 {
+                found = true
+                let cx = floor_div(x, 16)
+                let cz = floor_div(z, 16)
+                let left = Chunk{ cx: cx, cz: cz }
+                let right = Chunk{ cx: cx + 1, cz: cz }
+                terrain.generate(left)
+                terrain.generate(right)
+                let leaves_right : uint = 0
+                each 0 .. WORLD_HEIGHT as y {
+                    each 0 .. 16 as lz {
+                        if right.get(0, y, lz) == Block.leaves || right.get(1, y, lz) == Block.leaves : leaves_right++
+                    }
+                }
+                assert(leaves_right > 0)
+                let trunk_y = terrain.height(x, z) + 1
+                assert(left.get(15, trunk_y, floor_mod(z, 16)) == Block.log)
+            }
+            z++
+        }
+        x += 16
+    }
+    assert(found)
+}
+
+test "World: blocks at negative coordinates" {
+    let world = flat_world()
+    world.set_block(-1, 5, -1, Block.stone)
+    world.set_block(0, 5, 0, Block.brick)
+    assert(world.block(-1, 5, -1) == Block.stone)
+    assert(world.block(0, 5, 0) == Block.brick)
+    assert(world.block(-17, 5, 0) == Block.air)
+    assert(world.block(0, -1, 0) == Block.bedrock)
+    assert(floor_div(-1, 16) == -1 && floor_mod(-1, 16) == 15)
+    assert(floor_div(-16, 16) == -1 && floor_mod(-16, 16) == 0)
+    assert(floor_div(-17, 16) == -2 && floor_div(15, 16) == 0)
+    // Chunks outside the world read as air and take no blocks
+    world.set_block(100, 5, 100, Block.stone)
+    assert(world.block(100, 5, 100) == Block.air)
+}
+
+test "World: an edit on a border marks the neighbour for a new mesh" {
+    let world = flat_world()
+    each world.chunks as chunk : chunk.dirty = false
+    world.set_block(15, 5, 3, Block.stone)
+    assert((world.chunk(0, 0) ?? Chunk{ cx: 9, cz: 9 }).dirty)
+    assert((world.chunk(1, 0) ?? Chunk{ cx: 9, cz: 9 }).dirty)
+    assert(!(world.chunk(-1, 0) ?? Chunk{ cx: 9, cz: 9 }).dirty)
+    assert(!(world.chunk(0, 1) ?? Chunk{ cx: 9, cz: 9 }).dirty)
+}
+
+test "World: raycasts stop at the first block and name the face" {
+    let world = flat_world()
+    world.set_block(5, 10, 0, Block.stone)
+    let hit = world.raycast(.{ x: 0.5, y: 10.5, z: 0.5 }, .{ x: 1 }, 10) ?! {
+        assert(false)
+        return
+    }
+    assert(hit.x == 5 && hit.y == 10 && hit.z == 0)
+    assert(hit.normal_x == -1 && hit.normal_y == 0 && hit.normal_z == 0)
+    assert(hit.block == Block.stone)
+    assert(!isset(world.raycast(.{ x: 0.5, y: 10.5, z: 0.5 }, .{ x: 1 }, 3)))
+    // From above, through water
+    world.set_block(2, 3, 2, Block.water)
+    world.set_block(2, 2, 2, Block.sand)
+    let down = world.raycast(.{ x: 2.5, y: 8.5, z: 2.5 }, .{ y: -1 }, 10) ?! {
+        assert(false)
+        return
+    }
+    assert(down.y == 2 && down.normal_y == 1 && down.block == Block.sand)
+}
+
+test "Player: falls, lands and stops at walls" {
+    let world = flat_world()
+    let x = -16
+    while x < 32 {
+        let z = -16
+        while z < 32 {
+            world.set_block(x, 9, z, Block.stone)
+            z++
+        }
+        x++
+    }
+    let player = Player{ position: .{ x: 4.5, y: 20, z: 4.5 } }
+    each 0 .. 200 as _ : player.update(world, 1.0 / 60)
+    assert(player.on_ground)
+    assert(player.position.y == 10)
+    // A wall two blocks high at x = 8
+    world.set_block(8, 10, 4, Block.stone)
+    world.set_block(8, 11, 4, Block.stone)
+    each 0 .. 100 as _ : player.move_axis(world, 0, 0.1)
+    assert(player.position.x < 8 - 0.29 && player.position.x > 8 - 0.32)
+    assert(player.overlaps(7, 10, 4))
+    assert(!player.overlaps(8, 10, 4))
+}
+
+test "Mesher: hidden faces are left out" {
+    let world = flat_world()
+    let chunk = world.chunk(0, 0) ?! {
+        assert(false)
+        return
+    }
+    world.set_block(4, 10, 4, Block.stone)
+    world.mesher.build(world, chunk)
+    // One block: 6 faces of 2 triangles
+    assert(chunk.solid.vertex_count == 36)
+    world.set_block(5, 10, 4, Block.stone)
+    world.mesher.build(world, chunk)
+    assert(chunk.solid.vertex_count == 60)
+    // Water shows only the faces towards air, and none between water blocks
+    world.set_block(10, 10, 10, Block.water)
+    world.set_block(11, 10, 10, Block.water)
+    world.mesher.build(world, chunk)
+    assert(chunk.has_water && chunk.water.vertex_count == 10 * 6)
+    // Faces over the chunk border see the neighbour's blocks
+    world.set_block(15, 20, 8, Block.stone)
+    world.set_block(16, 20, 8, Block.stone)
+    world.mesher.build(world, chunk)
+    assert(chunk.solid.vertex_count == 60 + 5 * 6)
+    chunk.unload_meshes()
+}
+
+test "Mesher: corners next to blocks are darker" {
+    let world = flat_world()
+    let chunk = world.chunk(0, 0) ?! {
+        assert(false)
+        return
+    }
+    world.set_block(4, 10, 4, Block.stone)
+    world.mesher.build(world, chunk)
+    let lone_high, lone_low = brightest_and_darkest(chunk.solid)
+    assert(lone_high > lone_low && lone_low > 100)
+    // A wall beside the top face shades its near corners
+    world.set_block(5, 11, 4, Block.stone)
+    world.mesher.build(world, chunk)
+    let shaded_high, shaded_low = brightest_and_darkest(chunk.solid)
+    assert(shaded_high == lone_high && shaded_low < lone_low)
+    chunk.unload_meshes()
+}
+
+// The lightest and darkest vertex red channel of a mesh
+fn brightest_and_darkest(mesh: raylib.Mesh) (u8, u8) {
+    let colors = mesh.colors ?! return (0, 0)
+    let high : u8 = 0
+    let low : u8 = 255
+    let i : uint = 0
+    while i < mesh.vertex_count.to(uint) {
+        let r = @ptrv(colors.@cast(*[u8]), u8, i * 4)
+        if r > high : high = r
+        if r < low : low = r
+        i++
+    }
+    return (high, low)
+}

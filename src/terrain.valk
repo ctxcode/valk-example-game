@@ -1,0 +1,153 @@
+// World generation: height map, surface blocks, caves and trees
+
+use valk.math
+
+value CHUNK_SIZE (16)
+value WORLD_HEIGHT (96)
+value SEA_LEVEL (30)
+value SNOW_LEVEL (66)
+value CHUNK_VOLUME (16 * 16 * 96)
+
+class Terrain {
+    seed: uint
+    continents: Noise
+    hills: Noise
+    ridges: Noise
+    caves: Noise
+
+    static fn new(seed: uint) Terrain {
+        return Terrain{
+            seed: seed
+            continents: Noise.new(seed)
+            hills: Noise.new(seed + 1)
+            ridges: Noise.new(seed + 2)
+            caves: Noise.new(seed + 3)
+        }
+    }
+
+    // The height of the top block of a column
+    fn height(x: int, z: int) int {
+        let fx = x.to(float)
+        let fz = z.to(float)
+        let continent = this.continents.fbm2(fx * 0.0032, fz * 0.0032, 4)
+        let hills = this.hills.fbm2(fx * 0.017, fz * 0.017, 4)
+        // Ridged noise: sharp crests where the noise crosses zero
+        let ridge = 1 - math.abs(this.ridges.fbm2(fx * 0.0075, fz * 0.0075, 4))
+        let mountain_area = clamp_float((continent - 0.05) * 3, 0, 1)
+        let h = SEA_LEVEL.to(float) + 3 + continent * 18 + hills * 5 + mountain_area * ridge * ridge * ridge * 40
+        let top = math.floor(h).to(int)
+        if top < 4 : return 4
+        if top > WORLD_HEIGHT - 16 : return WORLD_HEIGHT - 16
+        return top
+    }
+
+    fn is_cave(x: int, y: int, z: int, surface: int) bool {
+        if y < 3 || y > surface - 4 : return false
+        let n = this.caves.noise3(x.to(float) * 0.055, y.to(float) * 0.09, z.to(float) * 0.055)
+        return n > 0.42
+    }
+
+    // A tree grows from this column: its trunk height, or 0
+    fn tree_at(x: int, z: int, surface: int) int {
+        if surface <= SEA_LEVEL + 1 || surface >= SNOW_LEVEL - 4 : return 0
+        let h = hash_position(this.seed * 31 + 7, x, z)
+        if h % 1000 >= 11 : return 0
+        return 4 + ((h >> 20) % 3).to(int)
+    }
+
+    fn generate(chunk: Chunk) {
+        let base_x = chunk.cx * CHUNK_SIZE
+        let base_z = chunk.cz * CHUNK_SIZE
+        each 0 .. CHUNK_SIZE as lz {
+            each 0 .. CHUNK_SIZE as lx {
+                let x = base_x + lx
+                let z = base_z + lz
+                let surface = this.height(x, z)
+                let beach = surface <= SEA_LEVEL + 1
+                let under_water = surface < SEA_LEVEL
+                let y = 0
+                while y < WORLD_HEIGHT {
+                    let block = Block.air
+                    if y == 0 {
+                        block = Block.bedrock
+                    } else if y < surface - 3 {
+                        block = Block.stone
+                    } else if y < surface {
+                        block = beach ? Block.sand : Block.dirt
+                    } else if y == surface {
+                        if under_water && surface < SEA_LEVEL - 4 : block = Block.gravel
+                        else if beach : block = Block.sand
+                        else if surface >= SNOW_LEVEL : block = Block.snow
+                        else if surface >= SNOW_LEVEL - 6 : block = Block.stone
+                        else : block = Block.grass
+                    } else if y <= SEA_LEVEL {
+                        block = Block.water
+                    }
+                    if block != Block.air && block != Block.water && block != Block.bedrock && this.is_cave(x, y, z, surface) {
+                        block = Block.air
+                    }
+                    if block != Block.air : chunk.set(lx, y, lz, block)
+                    y++
+                }
+            }
+        }
+        this.plant_trees(chunk)
+    }
+
+    // Trees within reach of the chunk, including those rooted in the chunks around it
+    fn plant_trees(chunk: Chunk) {
+        let base_x = chunk.cx * CHUNK_SIZE
+        let base_z = chunk.cz * CHUNK_SIZE
+        let z = base_z - 2
+        while z < base_z + CHUNK_SIZE + 2 {
+            let x = base_x - 2
+            while x < base_x + CHUNK_SIZE + 2 {
+                let surface = this.height(x, z)
+                let trunk = this.tree_at(x, z, surface)
+                if trunk > 0 : this.place_tree(chunk, x - base_x, surface + 1, z - base_z, trunk)
+                x++
+            }
+            z++
+        }
+    }
+
+    fn place_tree(chunk: Chunk, lx: int, y: int, lz: int, trunk: int) {
+        let top = y + trunk
+        // Leaves: two wide layers, then two narrow ones
+        let ly = top - 2
+        while ly <= top + 1 {
+            let radius = ly >= top ? 1 : 2
+            let dz = -radius
+            while dz <= radius {
+                let dx = -radius
+                while dx <= radius {
+                    let corner = dx.abs() == radius && dz.abs() == radius
+                    // World coordinates: a tree on a border looks the same from both chunks
+                    let wx = chunk.cx * CHUNK_SIZE + lx + dx
+                    let wz = chunk.cz * CHUNK_SIZE + lz + dz
+                    let random_corner = hash_position(this.seed + ly.to(uint), wx, wz) % 3 == 0
+                    let skip = corner && ((radius == 1 && ly == top + 1) || random_corner)
+                    if !skip && chunk.get_or_air(lx + dx, ly, lz + dz) == Block.air {
+                        chunk.set_if_inside(lx + dx, ly, lz + dz, Block.leaves)
+                    }
+                    dx++
+                }
+                dz++
+            }
+            ly++
+        }
+        let t = y
+        while t < top {
+            chunk.set_if_inside(lx, t, lz, Block.log)
+            t++
+        }
+        // The grass under the trunk turns to dirt
+        if chunk.get_or_air(lx, y - 1, lz) == Block.grass : chunk.set_if_inside(lx, y - 1, lz, Block.dirt)
+    }
+}
+
+fn clamp_float(value: float, low: float, high: float) float {
+    if value < low : return low
+    if value > high : return high
+    return value
+}

@@ -1,0 +1,285 @@
+// The chunks around the player: generated, meshed and drawn as the player moves
+
+use raylib
+use valk.math
+
+class World {
+    terrain: Terrain
+    chunks: HashMap[int, Chunk] (.{})
+    mesher: Mesher (.{})
+    // Chunks drawn in each direction
+    radius: int
+    // Offsets of the chunks around the player, nearest first
+    ring_x: Array[int] (.{})
+    ring_z: Array[int] (.{})
+
+    static fn new(seed: uint, radius: int) World {
+        let world = World{ terrain: Terrain.new(seed), radius: radius }
+        // One chunk further than drawn: meshing needs the neighbours
+        let reach = radius + 1
+        let offsets = Array[int]{}
+        let dz = -reach
+        while dz <= reach {
+            let dx = -reach
+            while dx <= reach {
+                offsets.append(ring_pack(dx, dz))
+                dx++
+            }
+            dz++
+        }
+        offsets.sort(fn(a: int, b: int) bool {
+            return ring_distance(a) < ring_distance(b)
+        })
+        each offsets as packed {
+            world.ring_x.append(packed / 1000 - 500)
+            world.ring_z.append(packed % 1000 - 500)
+        }
+        return world
+    }
+
+    fn chunk(cx: int, cz: int) ?Chunk {
+        return this.chunks.get(chunk_key(cx, cz)) !? null
+    }
+
+    fn block(x: int, y: int, z: int) Block {
+        if y < 0 : return Block.bedrock
+        if y >= WORLD_HEIGHT : return Block.air
+        let chunk = this.chunk(floor_div(x, CHUNK_SIZE), floor_div(z, CHUNK_SIZE)) ?! return Block.air
+        return chunk.get(floor_mod(x, CHUNK_SIZE), y, floor_mod(z, CHUNK_SIZE))
+    }
+
+    fn set_block(x: int, y: int, z: int, block: Block) {
+        if y < 0 || y >= WORLD_HEIGHT : return
+        let cx = floor_div(x, CHUNK_SIZE)
+        let cz = floor_div(z, CHUNK_SIZE)
+        let chunk = this.chunk(cx, cz) ?! return
+        let lx = floor_mod(x, CHUNK_SIZE)
+        let lz = floor_mod(z, CHUNK_SIZE)
+        chunk.set(lx, y, lz, block)
+        chunk.edited = true
+        chunk.dirty = true
+        // Faces and shading on the other side of a border change too
+        let dx = -1
+        while dx <= 1 {
+            let dz = -1
+            while dz <= 1 {
+                let near_x = dx == 0 || (dx < 0 && lx == 0) || (dx > 0 && lx == CHUNK_SIZE - 1)
+                let near_z = dz == 0 || (dz < 0 && lz == 0) || (dz > 0 && lz == CHUNK_SIZE - 1)
+                if (dx != 0 || dz != 0) && near_x && near_z {
+                    let neighbor = this.chunk(cx + dx, cz + dz)
+                    if isset(neighbor) : neighbor.dirty = true
+                }
+                dz++
+            }
+            dx++
+        }
+    }
+
+    // Generates and meshes the chunks around (`cx`, `cz`), nearest first, at most
+    // `budget` of each per call. Returns whether everything in reach is ready.
+    fn update(cx: int, cz: int, budget: uint) bool {
+        let generated : uint = 0
+        let meshed : uint = 0
+        let ready = true
+        each this.ring_x as dx, i {
+            let dz = this.ring_z[i]
+            let x = cx + dx
+            let z = cz + dz
+            let existing = this.chunk(x, z)
+            if !isset(existing) {
+                ready = false
+                if generated >= budget : continue
+                let chunk = Chunk{ cx: x, cz: z }
+                this.terrain.generate(chunk)
+                this.chunks.set(chunk_key(x, z), chunk)
+                generated++
+                continue
+            }
+            if !existing.dirty : continue
+            if dx.abs() > this.radius || dz.abs() > this.radius : continue
+            if !this.neighbors_ready(x, z) {
+                ready = false
+                continue
+            }
+            ready = false
+            if meshed >= budget : continue
+            this.mesher.build(this, existing)
+            meshed++
+        }
+        this.forget_far(cx, cz)
+        return ready
+    }
+
+    // How many of the chunks in view have a mesh, of how many
+    fn progress(cx: int, cz: int) (uint, uint) {
+        let done : uint = 0
+        let total : uint = 0
+        each this.ring_x as dx, i {
+            let dz = this.ring_z[i]
+            if dx.abs() > this.radius || dz.abs() > this.radius : continue
+            total++
+            let chunk = this.chunk(cx + dx, cz + dz)
+            if isset(chunk) && !chunk.dirty : done++
+        }
+        return (done, total)
+    }
+
+    fn neighbors_ready(cx: int, cz: int) bool {
+        let dx = -1
+        while dx <= 1 {
+            let dz = -1
+            while dz <= 1 {
+                if !isset(this.chunk(cx + dx, cz + dz)) : return false
+                dz++
+            }
+            dx++
+        }
+        return true
+    }
+
+    // Chunks far away give up their meshes; unedited ones are dropped, the terrain
+    // makes them again when the player comes back
+    fn forget_far(cx: int, cz: int) {
+        let limit = this.radius + 3
+        let drop = Array[int]{}
+        each this.chunks as chunk, key {
+            let far = (chunk.cx - cx).abs() > limit || (chunk.cz - cz).abs() > limit
+            if !far : continue
+            chunk.unload_meshes()
+            if !chunk.edited : drop.append(key)
+        }
+        each drop as key : this.chunks.remove(key)
+    }
+
+    fn draw(material: raylib.Material, camera: raylib.Camera3D) {
+        let forward = (camera.target - camera.position).normalize()
+        let limit = ((this.radius + 1) * CHUNK_SIZE).to(f32)
+        let visible = Array[Chunk]{}
+        each this.chunks as chunk {
+            if !chunk.has_solid && !chunk.has_water : continue
+            let center = raylib.Vector3{ x: (chunk.cx * CHUNK_SIZE + 8).to(f32), y: camera.position.y, z: (chunk.cz * CHUNK_SIZE + 8).to(f32) }
+            let to_chunk = center - camera.position
+            let distance = to_chunk.length()
+            if distance > limit : continue
+            // Behind the camera, by more than the chunk is wide
+            if to_chunk.dot(forward) < -24 : continue
+            visible.append(chunk)
+        }
+        each visible as chunk {
+            if chunk.has_solid : raylib.draw_mesh(chunk.solid, material, chunk_transform(chunk))
+        }
+        // Water last, see-through over what is behind it
+        each visible as chunk {
+            if chunk.has_water : raylib.draw_mesh(chunk.water, material, chunk_transform(chunk))
+        }
+    }
+
+    fn unload() {
+        each this.chunks as chunk : chunk.unload_meshes()
+        this.chunks.clear()
+    }
+
+    // The first block that is not air or water along a ray, up to `reach` blocks away
+    fn raycast(origin: raylib.Vector3, direction: raylib.Vector3, reach: f32) ?RayHit {
+        let x = math.floor(origin.x).to(int)
+        let y = math.floor(origin.y).to(int)
+        let z = math.floor(origin.z).to(int)
+        let step_x = direction.x > 0 ? 1 : -1
+        let step_y = direction.y > 0 ? 1 : -1
+        let step_z = direction.z > 0 ? 1 : -1
+        let next_x = ray_boundary(origin.x, direction.x)
+        let next_y = ray_boundary(origin.y, direction.y)
+        let next_z = ray_boundary(origin.z, direction.z)
+        let delta_x = ray_step(direction.x)
+        let delta_y = ray_step(direction.y)
+        let delta_z = ray_step(direction.z)
+        let normal_x = 0
+        let normal_y = 0
+        let normal_z = 0
+        let travelled : f32 = 0
+        while travelled <= reach {
+            let block = this.block(x, y, z)
+            if block != Block.air && block != Block.water {
+                return RayHit{ x: x, y: y, z: z, normal_x: normal_x, normal_y: normal_y, normal_z: normal_z, block: block }
+            }
+            if next_x < next_y && next_x < next_z {
+                x += step_x
+                travelled = next_x
+                next_x += delta_x
+                normal_x = -step_x
+                normal_y = 0
+                normal_z = 0
+            } else if next_y < next_z {
+                y += step_y
+                travelled = next_y
+                next_y += delta_y
+                normal_x = 0
+                normal_y = -step_y
+                normal_z = 0
+            } else {
+                z += step_z
+                travelled = next_z
+                next_z += delta_z
+                normal_x = 0
+                normal_y = 0
+                normal_z = -step_z
+            }
+        }
+        return null
+    }
+}
+
+class RayHit {
+    x: int
+    y: int
+    z: int
+    // The face that was hit: where a placed block goes
+    normal_x: int
+    normal_y: int
+    normal_z: int
+    block: Block
+}
+
+// Distance along the ray to the first block boundary on one axis
+fn ray_boundary(position: f32, direction: f32) f32 {
+    if direction == 0 : return 1000000
+    let cell = math.floor(position).to(f32)
+    let edge = direction > 0 ? cell + 1 - position : position - cell
+    return edge / math.abs(direction).to(f32)
+}
+
+fn ray_step(direction: f32) f32 {
+    if direction == 0 : return 1000000
+    return 1 / math.abs(direction).to(f32)
+}
+
+// A chunk offset in one number, to sort the offsets by distance
+fn ring_pack(dx: int, dz: int) int {
+    return (dx + 500) * 1000 + dz + 500
+}
+
+fn ring_distance(packed: int) int {
+    let dx = packed / 1000 - 500
+    let dz = packed % 1000 - 500
+    return dx * dx + dz * dz
+}
+
+fn chunk_key(cx: int, cz: int) int {
+    return (cx << 32) ^ (cz & 0xffffffff)
+}
+
+fn chunk_transform(chunk: Chunk) raylib.Matrix {
+    return raylib.Matrix.translate((chunk.cx * CHUNK_SIZE).to(f32), 0, (chunk.cz * CHUNK_SIZE).to(f32))
+}
+
+fn floor_div(value: int, by: int) int {
+    let q = value / by
+    if value % by != 0 && value < 0 : q--
+    return q
+}
+
+fn floor_mod(value: int, by: int) int {
+    let m = value % by
+    if m < 0 : m += by
+    return m
+}

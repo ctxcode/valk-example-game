@@ -1,0 +1,104 @@
+// Block types, and how each one looks and behaves
+
+enum Block : u8 {
+    air
+    grass
+    dirt
+    stone
+    cobblestone
+    sand
+    water
+    log
+    leaves
+    planks
+    glass
+    bedrock
+    snow
+    brick
+    gravel
+}
+
+// The blocks the hotbar offers, in slot order
+fn hotbar_blocks() Array[Block] {
+    return Array[Block]{ Block.grass, Block.dirt, Block.stone, Block.cobblestone, Block.planks, Block.log, Block.glass, Block.brick, Block.sand }
+}
+
+fn block_name(block: Block) String {
+    match block {
+        Block.air => return "Air"
+        Block.grass => return "Grass"
+        Block.dirt => return "Dirt"
+        Block.stone => return "Stone"
+        Block.cobblestone => return "Cobblestone"
+        Block.sand => return "Sand"
+        Block.water => return "Water"
+        Block.log => return "Log"
+        Block.leaves => return "Leaves"
+        Block.planks => return "Planks"
+        Block.glass => return "Glass"
+        Block.bedrock => return "Bedrock"
+        Block.snow => return "Snow"
+        Block.brick => return "Brick"
+        Block.gravel => return "Gravel"
+    }
+}
+
+// Players collide with it
+fn is_solid(block: Block) bool {
+    return block != Block.air && block != Block.water
+}
+
+// Hides the faces of the blocks next to it
+fn is_opaque(block: Block) bool {
+    return block != Block.air && block != Block.water && block != Block.leaves && block != Block.glass
+}
+
+// A face of `block` shows when the block next to it does not hide it
+fn face_visible(block: Block, neighbor: Block) bool {
+    if is_opaque(neighbor) : return false
+    if neighbor == Block.air : return true
+    // No faces between two blocks of water or glass
+    return neighbor != block || block == Block.leaves
+}
+
+// Texture tiles in the atlas, see atlas.valk
+value TILE_GRASS_TOP (0)
+value TILE_GRASS_SIDE (1)
+value TILE_DIRT (2)
+value TILE_STONE (3)
+value TILE_COBBLESTONE (4)
+value TILE_SAND (5)
+value TILE_WATER (6)
+value TILE_LOG_SIDE (7)
+value TILE_LOG_TOP (8)
+value TILE_LEAVES (9)
+value TILE_PLANKS (10)
+value TILE_GLASS (11)
+value TILE_BEDROCK (12)
+value TILE_SNOW (13)
+value TILE_SNOW_SIDE (14)
+value TILE_BRICK (15)
+value TILE_GRAVEL (16)
+
+// Faces: 0 = +x, 1 = -x, 2 = +y (top), 3 = -y (bottom), 4 = +z, 5 = -z
+fn block_tile(block: Block, face: uint) uint {
+    let top = face == 2
+    let bottom = face == 3
+    match block {
+        Block.grass => return top ? TILE_GRASS_TOP : (bottom ? TILE_DIRT : TILE_GRASS_SIDE)
+        Block.dirt => return TILE_DIRT
+        Block.stone => return TILE_STONE
+        Block.cobblestone => return TILE_COBBLESTONE
+        Block.sand => return TILE_SAND
+        Block.water => return TILE_WATER
+        Block.log => return (top || bottom) ? TILE_LOG_TOP : TILE_LOG_SIDE
+        Block.leaves => return TILE_LEAVES
+        Block.planks => return TILE_PLANKS
+        Block.glass => return TILE_GLASS
+        Block.bedrock => return TILE_BEDROCK
+        Block.snow => return top ? TILE_SNOW : (bottom ? TILE_DIRT : TILE_SNOW_SIDE)
+        Block.brick => return TILE_BRICK
+        Block.gravel => return TILE_GRAVEL
+        Block.air => return TILE_STONE
+    }
+}

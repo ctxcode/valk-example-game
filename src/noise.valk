@@ -1,0 +1,122 @@
+// Perlin noise, seeded, for the terrain
+
+use valk.math
+
+class Noise {
+    perm: Array[u8]
+
+    static fn new(seed: uint) Noise {
+        let values = Array[u8]{}
+        each 0 .. 256 as i : values.append(i.to(u8))
+        // Shuffle with a small LCG so every seed gets its own table
+        let state = seed * 6364136223846793005 + 1442695040888963407
+        let i : uint = 255
+        while i > 0 {
+            state = state * 6364136223846793005 + 1442695040888963407
+            let j = (state >> 33) % (i + 1)
+            values.swap(i, j)
+            i--
+        }
+        let perm = Array[u8]{}
+        each 0 .. 512 as k : perm.append(values[k & 255])
+        return Noise{ perm: perm }
+    }
+
+    - fn hash(i: int) uint {
+        return this.perm[(i & 255).to(uint)].to(uint)
+    }
+
+    // -1 .. 1, smooth, 0 at every integer point
+    fn noise2(x: float, y: float) float {
+        let fx = math.floor(x)
+        let fy = math.floor(y)
+        let xi = fx.to(int)
+        let yi = fy.to(int)
+        let xf = x - fx
+        let yf = y - fy
+        let u = fade(xf)
+        let v = fade(yf)
+        let aa = this.hash(this.hash(xi).to(int) + yi)
+        let ab = this.hash(this.hash(xi).to(int) + yi + 1)
+        let ba = this.hash(this.hash(xi + 1).to(int) + yi)
+        let bb = this.hash(this.hash(xi + 1).to(int) + yi + 1)
+        let x1 = lerp(grad2(aa, xf, yf), grad2(ba, xf - 1, yf), u)
+        let x2 = lerp(grad2(ab, xf, yf - 1), grad2(bb, xf - 1, yf - 1), u)
+        return lerp(x1, x2, v)
+    }
+
+    fn noise3(x: float, y: float, z: float) float {
+        let fx = math.floor(x)
+        let fy = math.floor(y)
+        let fz = math.floor(z)
+        let xi = fx.to(int)
+        let yi = fy.to(int)
+        let zi = fz.to(int)
+        let xf = x - fx
+        let yf = y - fy
+        let zf = z - fz
+        let u = fade(xf)
+        let v = fade(yf)
+        let w = fade(zf)
+        let a = this.hash(xi).to(int) + yi
+        let aa = this.hash(a).to(int) + zi
+        let ab = this.hash(a + 1).to(int) + zi
+        let b = this.hash(xi + 1).to(int) + yi
+        let ba = this.hash(b).to(int) + zi
+        let bb = this.hash(b + 1).to(int) + zi
+        let x1 = lerp(grad3(this.hash(aa), xf, yf, zf), grad3(this.hash(ba), xf - 1, yf, zf), u)
+        let x2 = lerp(grad3(this.hash(ab), xf, yf - 1, zf), grad3(this.hash(bb), xf - 1, yf - 1, zf), u)
+        let y1 = lerp(x1, x2, v)
+        let x3 = lerp(grad3(this.hash(aa + 1), xf, yf, zf - 1), grad3(this.hash(ba + 1), xf - 1, yf, zf - 1), u)
+        let x4 = lerp(grad3(this.hash(ab + 1), xf, yf - 1, zf - 1), grad3(this.hash(bb + 1), xf - 1, yf - 1, zf - 1), u)
+        let y2 = lerp(x3, x4, v)
+        return lerp(y1, y2, w)
+    }
+
+    // Octaves of noise2 added up, each twice as fine and half as strong; -1 .. 1
+    fn fbm2(x: float, y: float, octaves: uint) float {
+        let total : float = 0
+        let amplitude : float = 1
+        let frequency : float = 1
+        let max : float = 0
+        let i : uint = 0
+        while i < octaves {
+            total += this.noise2(x * frequency, y * frequency) * amplitude
+            max += amplitude
+            amplitude *= 0.5
+            frequency *= 2
+            i++
+        }
+        return total / max
+    }
+}
+
+fn fade(t: float) float {
+    return t * t * t * (t * (t * 6 - 15) + 10)
+}
+
+fn lerp(a: float, b: float, t: float) float {
+    return a + t * (b - a)
+}
+
+fn grad2(hash: uint, x: float, y: float) float {
+    let h = hash & 7
+    let u = h < 4 ? x : y
+    let v = h < 4 ? y : x
+    return ((h & 1) == 0 ? u : -u) + ((h & 2) == 0 ? 2 * v : -2 * v)
+}
+
+fn grad3(hash: uint, x: float, y: float, z: float) float {
+    let h = hash & 15
+    let u = h < 8 ? x : y
+    let v = h < 4 ? y : (h == 12 || h == 14 ? x : z)
+    return ((h & 1) == 0 ? u : -u) + ((h & 2) == 0 ? v : -v)
+}
+
+// A well mixed number for a position, the same for every run with the same seed
+fn hash_position(seed: uint, x: int, z: int) uint {
+    let h = seed ^ (x.to(uint) * 0x9E3779B97F4A7C15) ^ (z.to(uint) * 0xC2B2AE3D27D4EB4F)
+    h = (h ^ (h >> 30)) * 0xBF58476D1CE4E5B9
+    h = (h ^ (h >> 27)) * 0x94D049BB133111EB
+    return h ^ (h >> 31)
+}

@@ -1,0 +1,271 @@
+// Valkcraft: a small Minecraft-like game, made with Valk and raylib
+
+use raylib
+use valk.math
+
+class Options {
+    seed: uint (1337)
+    distance: int (8)
+    // Save one frame to this file once the world is loaded, then quit
+    screenshot: String ("")
+    width: i32 (1280)
+    height: i32 (720)
+    // Where to start and where to look, in degrees; the default spot is the land nearest the origin
+    at_x: ?int (null)
+    at_z: ?int (null)
+    yaw: f32 (45)
+    pitch: f32 (-12)
+    // Start this far above the ground, flying
+    up: int (0)
+    // Keep the crosshair, hotbar and text in the screenshot
+    hud: bool (false)
+}
+
+fn parse_options(args: Array[String]) Options {
+    let options = Options{}
+    let i : uint = 1
+    while i < args.length {
+        let arg = args[i]
+        let next = i + 1 < args.length ? args[i + 1] : ""
+        if arg == "--seed" {
+            options.seed = next.to(uint) !? options.seed
+            i++
+        } else if arg == "--distance" {
+            options.distance = next.to(int) !? options.distance
+            if options.distance < 2 : options.distance = 2
+            if options.distance > 24 : options.distance = 24
+            i++
+        } else if arg == "--screenshot" {
+            options.screenshot = next
+            i++
+        } else if arg == "--size" {
+            let parts = next.split("x")
+            if parts.length == 2 {
+                options.width = parts[0].to(i32) !? options.width
+                options.height = parts[1].to(i32) !? options.height
+            }
+            i++
+        } else if arg == "--at" {
+            let parts = next.split(",")
+            if parts.length == 2 {
+                options.at_x = parts[0].to(int) !? null
+                options.at_z = parts[1].to(int) !? null
+            }
+            i++
+        } else if arg == "--hud" {
+            options.hud = true
+        } else if arg == "--up" {
+            options.up = next.to(int) !? 0
+            i++
+        } else if arg == "--yaw" {
+            options.yaw = next.to(f32) !? options.yaw
+            i++
+        } else if arg == "--pitch" {
+            options.pitch = next.to(f32) !? options.pitch
+            i++
+        } else if arg == "--help" || arg == "-h" {
+            println("valkcraft [--seed N] [--distance CHUNKS] [--size WxH] [--at X,Z] [--up BLOCKS] [--yaw DEG] [--pitch DEG] [--screenshot FILE [--hud]]")
+            exit(0)
+        }
+        i++
+    }
+    return options
+}
+
+fn main(args: Array[String]) {
+    let options = parse_options(args)
+    let screenshot = options.screenshot.bytes > 0
+
+    raylib.set_trace_log_level(.warning)
+    raylib.set_config_flags(raylib.FLAG_MSAA_4X_HINT | raylib.FLAG_WINDOW_RESIZABLE | raylib.FLAG_VSYNC_HINT)
+    raylib.init_window(options.width, options.height, "Valkcraft")
+    defer raylib.close_window()
+    raylib.set_exit_key(.none)
+
+    let atlas = build_atlas()
+    let shader = raylib.load_shader_from_memory(BLOCK_VERTEX_SHADER, BLOCK_FRAGMENT_SHADER)
+    let fog_color_location = shader.location("fogColor")
+    let fog_start_location = shader.location("fogStart")
+    let fog_end_location = shader.location("fogEnd")
+    let view_location = shader.location("viewPos")
+    let material = raylib.load_material_default()
+    material.shader = shader
+    material.set_texture(.albedo, atlas)
+
+    let sky = raylib.Color.rgb(142, 192, 238)
+    let view = (options.distance * CHUNK_SIZE).to(f32)
+    shader.set_color(fog_color_location, sky)
+    shader.set_float(fog_start_location, view * 0.55)
+    shader.set_float(fog_end_location, view * 0.95)
+
+    let world = World.new(options.seed, options.distance)
+    let clouds = Clouds{ noise: Noise.new(options.seed + 99) }
+    let spawn_x, spawn_z = find_land(world.terrain)
+    let at_x = options.at_x
+    let at_z = options.at_z
+    if isset(at_x) && isset(at_z) {
+        spawn_x = at_x
+        spawn_z = at_z
+    }
+    let spawn_height = world.terrain.height(spawn_x, spawn_z)
+    if spawn_height < SEA_LEVEL : spawn_height = SEA_LEVEL
+    let player = Player{
+        position: .{ x: spawn_x.to(f32) + 0.5, y: (spawn_height + 1 + options.up).to(f32), z: spawn_z.to(f32) + 0.5 }
+        yaw: options.yaw * raylib.DEG2RAD.to(f32)
+        pitch: options.pitch * raylib.DEG2RAD.to(f32)
+        flying: options.up > 0
+    }
+
+    let loaded = false
+    let mouse_captured = false
+    let show_help = true
+    let selected : uint = 0
+    let blocks = hotbar_blocks()
+    let break_cooldown : f32 = 0
+    let place_cooldown : f32 = 0
+    let screenshots = 0
+
+    while !raylib.window_should_close() {
+        let dt = raylib.get_frame_time()
+        if dt > 0.05 : dt = 0.05
+        let cx = floor_div(math.floor(player.position.x).to(int), CHUNK_SIZE)
+        let cz = floor_div(math.floor(player.position.z).to(int), CHUNK_SIZE)
+
+        // Load the nearby world first, before the player can fall through it
+        let ready = world.update(cx, cz, loaded ? 2 : 24)
+        if !loaded && ready : loaded = true
+
+        let target : ?RayHit = null
+        if loaded {
+            // Mouse and keys
+            if mouse_captured {
+                player.look(raylib.get_mouse_delta())
+                if raylib.is_key_pressed(.escape) {
+                    raylib.enable_cursor()
+                    mouse_captured = false
+                }
+            } else if !screenshot && raylib.is_mouse_button_pressed(.left) {
+                raylib.disable_cursor()
+                mouse_captured = true
+                break_cooldown = 0.3
+            }
+            if raylib.is_key_pressed(.f) {
+                player.flying = !player.flying
+                player.velocity = .{}
+            }
+            if raylib.is_key_pressed(.h) : show_help = !show_help
+            if raylib.is_key_pressed(.f2) {
+                screenshots++
+                raylib.take_screenshot("valkcraft-" + screenshots + ".png")
+            }
+            each blocks as _, i {
+                if raylib.is_key_pressed(key_for_slot(i)) : selected = i
+            }
+            let wheel = raylib.get_mouse_wheel_move()
+            if wheel > 0 : selected = selected == 0 ? blocks.length - 1 : selected - 1
+            if wheel < 0 : selected = (selected + 1) % blocks.length
+
+            if !screenshot : player.update(world, dt)
+
+            // Breaking and placing, repeating while the button is held
+            target = world.raycast(player.eye(), player.forward(), 6)
+            break_cooldown -= dt
+            place_cooldown -= dt
+            if mouse_captured && isset(target) {
+                if raylib.is_mouse_button_down(.left) && break_cooldown <= 0 {
+                    if target.block != Block.bedrock : world.set_block(target.x, target.y, target.z, Block.air)
+                    break_cooldown = 0.22
+                }
+                if raylib.is_mouse_button_down(.right) && place_cooldown <= 0 {
+                    let px = target.x + target.normal_x
+                    let py = target.y + target.normal_y
+                    let pz = target.z + target.normal_z
+                    let there = world.block(px, py, pz)
+                    if (there == Block.air || there == Block.water) && !player.overlaps(px, py, pz) {
+                        world.set_block(px, py, pz, blocks[selected])
+                    }
+                    place_cooldown = 0.22
+                }
+            }
+            if !raylib.is_mouse_button_down(.left) : break_cooldown = 0
+            if !raylib.is_mouse_button_down(.right) : place_cooldown = 0
+        }
+
+        let camera = player.camera(70)
+        shader.set_vec3(view_location, camera.position)
+
+        raylib.begin_drawing()
+        raylib.clear_background(sky)
+        if loaded {
+            raylib.begin_mode_3d(camera)
+            world.draw(material, camera)
+            clouds.draw(camera, raylib.get_time().to(f32), view * 1.3)
+            if isset(target) {
+                let center = raylib.Vector3{ x: target.x.to(f32) + 0.5, y: target.y.to(f32) + 0.5, z: target.z.to(f32) + 0.5 }
+                raylib.draw_cube_wires(center, 1.01, 1.01, 1.01, raylib.Color.rgba(0, 0, 0, 200))
+            }
+            raylib.end_mode_3d()
+
+            if player.in_water && camera.position.y < SEA_LEVEL.to(f32) + 0.9 {
+                raylib.draw_rectangle(0, 0, raylib.get_screen_width(), raylib.get_screen_height(), raylib.Color.rgba(30, 70, 180, 90))
+            }
+            if !screenshot || options.hud {
+                draw_crosshair()
+                draw_hotbar(atlas, selected)
+                draw_info(player, world, target)
+                if show_help : draw_help()
+                if !mouse_captured && !screenshot : draw_paused()
+            }
+        } else {
+            let done, total = world.progress(cx, cz)
+            draw_loading(done, total)
+        }
+        raylib.end_drawing()
+
+        if screenshot && loaded {
+            let image = raylib.load_image_from_screen()
+            raylib.export_image(image, options.screenshot)
+            raylib.unload_image(image)
+            break
+        }
+    }
+
+    world.unload()
+    raylib.unload_shader(shader)
+    raylib.unload_texture(atlas)
+}
+
+// The dry column nearest the origin, walking out in growing squares
+fn find_land(terrain: Terrain) (int, int) {
+    let radius = 0
+    while radius < 400 {
+        let x = -radius
+        while x <= radius {
+            let z = -radius
+            while z <= radius {
+                if (x.abs() == radius || z.abs() == radius) && terrain.height(x, z) > SEA_LEVEL + 2 {
+                    // Not in a tree
+                    if terrain.tree_at(x, z, terrain.height(x, z)) == 0 : return (x, z)
+                }
+                z += 4
+            }
+            x += 4
+        }
+        radius += 4
+    }
+    return (0, 0)
+}
+
+fn key_for_slot(slot: uint) raylib.KeyboardKey {
+    match slot {
+        0 => return .one
+        1 => return .two
+        2 => return .three
+        3 => return .four
+        4 => return .five
+        5 => return .six
+        6 => return .seven
+        7 => return .eight
+        default => return .nine
+    }
+}

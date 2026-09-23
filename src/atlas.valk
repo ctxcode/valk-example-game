@@ -1,0 +1,192 @@
+// The block textures, painted at startup: one image of 16x16 tiles
+
+use raylib
+
+value TILE_SIZE (16)
+value ATLAS_COLUMNS (8)
+value ATLAS_ROWS (3)
+
+// Texture coordinates of a tile: left, top, right, bottom. Pulled in a little so
+// neighbouring tiles never bleed in at the edges.
+fn tile_uv(tile: uint) (f32, f32, f32, f32) {
+    let w = (ATLAS_COLUMNS * TILE_SIZE).to(f32)
+    let h = (ATLAS_ROWS * TILE_SIZE).to(f32)
+    let x = ((tile % ATLAS_COLUMNS) * TILE_SIZE).to(f32)
+    let y = ((tile / ATLAS_COLUMNS) * TILE_SIZE).to(f32)
+    let inset : f32 = 0.05
+    return ((x + inset) / w, (y + inset) / h, (x + TILE_SIZE.to(f32) - inset) / w, (y + TILE_SIZE.to(f32) - inset) / h)
+}
+
+fn tile_rectangle(tile: uint) raylib.Rectangle {
+    return raylib.Rectangle{
+        x: ((tile % ATLAS_COLUMNS) * TILE_SIZE).to(f32)
+        y: ((tile / ATLAS_COLUMNS) * TILE_SIZE).to(f32)
+        width: TILE_SIZE.to(f32)
+        height: TILE_SIZE.to(f32)
+    }
+}
+
+// A color a little lighter or darker, by `amount` (-255 .. 255)
+fn shade(color: raylib.Color, amount: int) raylib.Color {
+    return raylib.Color{ r: clamp_channel(color.r.to(int) + amount), g: clamp_channel(color.g.to(int) + amount), b: clamp_channel(color.b.to(int) + amount), a: color.a }
+}
+
+fn clamp_channel(value: int) u8 {
+    if value < 0 : return 0
+    if value > 255 : return 255
+    return value.to(u8)
+}
+
+class Painter {
+    image: raylib.Image
+    tile: uint (0)
+
+    // -range .. range, fixed per pixel of a tile
+    fn jitter(x: int, y: int, range: int) int {
+        let h = hash_position(this.tile * 7919 + 17, x, y)
+        return (h % (range * 2 + 1).to(uint)).to(int) - range
+    }
+
+    fn chance(x: int, y: int, salt: uint, percent: uint) bool {
+        return hash_position(this.tile * 104729 + salt, x, y) % 100 < percent
+    }
+
+    fn put(x: int, y: int, color: raylib.Color) {
+        let tx = ((this.tile % ATLAS_COLUMNS) * TILE_SIZE).to(i32)
+        let ty = ((this.tile / ATLAS_COLUMNS) * TILE_SIZE).to(i32)
+        this.image.draw_pixel(tx + x.to(i32), ty + y.to(i32), color)
+    }
+
+    fn noisy(tile: uint, base: raylib.Color, range: int) {
+        this.tile = tile
+        each 0 .. 16 as y {
+            each 0 .. 16 as x : this.put(x, y, shade(base, this.jitter(x, y, range)))
+        }
+    }
+}
+
+fn build_atlas() raylib.Texture {
+    let image = raylib.gen_image_color((ATLAS_COLUMNS * TILE_SIZE).to(i32), (ATLAS_ROWS * TILE_SIZE).to(i32), raylib.BLANK)
+    let p = Painter{ image: image }
+
+    let grass = raylib.Color.rgb(96, 158, 52)
+    let dirt = raylib.Color.rgb(134, 96, 67)
+    let snow = raylib.Color.rgb(242, 246, 250)
+
+    p.noisy(TILE_GRASS_TOP, grass, 16)
+    p.noisy(TILE_DIRT, dirt, 14)
+    each 0 .. 16 as y {
+        each 0 .. 16 as x {
+            if p.chance(x, y, 1, 8) : p.put(x, y, shade(dirt, -35))
+        }
+    }
+
+    // Dirt with a ragged strip of grass on top
+    grass_side(p, TILE_GRASS_SIDE, dirt, grass)
+    grass_side(p, TILE_SNOW_SIDE, dirt, snow)
+
+    p.noisy(TILE_STONE, raylib.Color.rgb(125, 125, 125), 10)
+    each 0 .. 16 as y {
+        each 0 .. 16 as x {
+            if p.chance(x / 2, y, 2, 12) : p.put(x, y, raylib.Color.rgb(104, 104, 104))
+        }
+    }
+
+    // Stones of 4 or 8 pixels with dark joints between them
+    p.tile = TILE_COBBLESTONE
+    each 0 .. 16 as y {
+        each 0 .. 16 as x {
+            let row = y / 4
+            let cell_x = (x + (row % 2) * 3) / 5
+            let edge = y % 4 == 3 || (x + (row % 2) * 3) % 5 == 4
+            let base = 110 + (hash_position(31, cell_x, row) % 40).to(int)
+            let c = edge ? 70 : base + p.jitter(x, y, 8)
+            p.put(x, y, raylib.Color.rgb(clamp_channel(c), clamp_channel(c), clamp_channel(c)))
+        }
+    }
+
+    p.noisy(TILE_SAND, raylib.Color.rgb(219, 207, 163), 7)
+    p.noisy(TILE_WATER, raylib.Color{ r: 44, g: 94, b: 210, a: 170 }, 8)
+    p.noisy(TILE_BEDROCK, raylib.Color.rgb(64, 64, 64), 30)
+    p.noisy(TILE_SNOW, snow, 4)
+    p.noisy(TILE_GRAVEL, raylib.Color.rgb(131, 123, 118), 25)
+
+    // Bark: dark vertical grooves
+    p.tile = TILE_LOG_SIDE
+    each 0 .. 16 as y {
+        each 0 .. 16 as x {
+            let groove = (x + (hash_position(5, x, y / 5) % 2).to(int)) % 4 == 0
+            let base = raylib.Color.rgb(104, 80, 50)
+            p.put(x, y, shade(base, (groove ? -28 : 0) + p.jitter(x, y, 7)))
+        }
+    }
+    // Rings around the middle
+    p.tile = TILE_LOG_TOP
+    each 0 .. 16 as y {
+        each 0 .. 16 as x {
+            let dx = x * 2 - 15
+            let dy = y * 2 - 15
+            let ring = (dx.abs() > dy.abs() ? dx.abs() : dy.abs()) / 2
+            let color = ring >= 7 ? raylib.Color.rgb(104, 80, 50) : (ring % 2 == 0 ? raylib.Color.rgb(176, 142, 90) : raylib.Color.rgb(150, 118, 72))
+            p.put(x, y, shade(color, p.jitter(x, y, 6)))
+        }
+    }
+
+    // Leaves: holes to see through
+    p.tile = TILE_LEAVES
+    each 0 .. 16 as y {
+        each 0 .. 16 as x {
+            if p.chance(x, y, 3, 22) : continue
+            p.put(x, y, shade(raylib.Color.rgb(58, 122, 32), p.jitter(x, y, 22)))
+        }
+    }
+
+    // Planks: boards of 4 rows with seams
+    p.tile = TILE_PLANKS
+    each 0 .. 16 as y {
+        each 0 .. 16 as x {
+            let board = y / 4
+            let seam = y % 4 == 3 || (x + board * 5) % 16 == 0
+            let base = raylib.Color.rgb(166, 132, 80)
+            p.put(x, y, shade(base, seam ? -45 : p.jitter(x / 3, y, 9) + (board % 2 == 0 ? 6 : -4)))
+        }
+    }
+
+    // Glass: only the frame and a glint, the rest stays see-through
+    p.tile = TILE_GLASS
+    let frame = raylib.Color.rgb(215, 235, 245)
+    each 0 .. 16 as i {
+        p.put(i, 0, frame)
+        p.put(i, 15, frame)
+        p.put(0, i, frame)
+        p.put(15, i, frame)
+    }
+    each 0 .. 4 as i {
+        p.put(3 + i, 6 - i, raylib.Color.rgb(250, 252, 255))
+        p.put(9 + i, 12 - i, raylib.Color.rgb(250, 252, 255))
+    }
+
+    // Bricks: rows of 4 pixels, joints offset every other row
+    p.tile = TILE_BRICK
+    each 0 .. 16 as y {
+        each 0 .. 16 as x {
+            let row = y / 4
+            let joint = y % 4 == 3 || (x + (row % 2) * 4) % 8 == 7
+            let color = joint ? raylib.Color.rgb(176, 166, 154) : shade(raylib.Color.rgb(150, 64, 46), p.jitter(x, y, 12))
+            p.put(x, y, color)
+        }
+    }
+
+    let texture = raylib.load_texture_from_image(p.image)
+    raylib.unload_image(p.image)
+    raylib.set_texture_filter(texture, .point)
+    return texture
+}
+
+fn grass_side(p: Painter, tile: uint, dirt: raylib.Color, top: raylib.Color) {
+    p.noisy(tile, dirt, 14)
+    each 0 .. 16 as x {
+        let depth = 2 + (hash_position(tile, x, 0) % 3).to(int)
+        each 0 .. depth as y : p.put(x, y, shade(top, p.jitter(x, y, 14)))
+    }
+}

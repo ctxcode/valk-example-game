@@ -1,0 +1,243 @@
+// A 16 x 96 x 16 column of blocks, and the meshes that draw it
+
+use raylib
+
+class Chunk {
+    cx: int
+    cz: int
+    blocks: Array[Block] (Array[Block].fill(CHUNK_VOLUME, Block.air))
+    // The highest y with a block, to skip the empty sky when meshing
+    top: int (0)
+    solid: raylib.Mesh (.{})
+    water: raylib.Mesh (.{})
+    has_solid: bool (false)
+    has_water: bool (false)
+    // The meshes are missing or out of date
+    dirty: bool (true)
+    // Changed by the player: kept when the player walks away
+    edited: bool (false)
+
+    fn get(x: int, y: int, z: int) Block {
+        return this.blocks[chunk_index(x, y, z)]
+    }
+
+    fn set(x: int, y: int, z: int, block: Block) {
+        this.blocks[chunk_index(x, y, z)] = block
+        if block != Block.air && y > this.top : this.top = y
+    }
+
+    fn get_or_air(x: int, y: int, z: int) Block {
+        if !chunk_inside(x, y, z) : return Block.air
+        return this.get(x, y, z)
+    }
+
+    fn set_if_inside(x: int, y: int, z: int, block: Block) {
+        if chunk_inside(x, y, z) : this.set(x, y, z, block)
+    }
+
+    fn unload_meshes() {
+        if this.has_solid : raylib.unload_mesh(this.solid)
+        if this.has_water : raylib.unload_mesh(this.water)
+        this.has_solid = false
+        this.has_water = false
+        this.dirty = true
+    }
+}
+
+fn chunk_index(x: int, y: int, z: int) uint {
+    return ((y * CHUNK_SIZE + z) * CHUNK_SIZE + x).to(uint)
+}
+
+fn chunk_inside(x: int, y: int, z: int) bool {
+    return x >= 0 && x < CHUNK_SIZE && z >= 0 && z < CHUNK_SIZE && y >= 0 && y < WORLD_HEIGHT
+}
+
+// Turns chunks into meshes. The blocks of a chunk and a one block border from its
+// neighbours are copied into `padded` first, so every lookup is an array index.
+class Mesher {
+    // Off in the tests, which have no window to upload to
+    upload: bool (true)
+    padded: Array[Block] (Array[Block].fill(18 * 18 * WORLD_HEIGHT, Block.air))
+    // The block shader has no use for normals
+    solid: raylib.MeshBuilder (.{ normals: false })
+    water: raylib.MeshBuilder (.{ normals: false })
+    // Per face: the normal, then 4 corners of the unit cube, counter-clockwise from outside
+    normals: Array[int] (.{ 1, 0, 0, -1, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 1, 0, 0, -1 })
+    corners: Array[int] (.{
+        1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 1, 1
+        0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0
+        0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0
+        0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1
+        0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1
+        1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0
+    })
+    // Light per face (+x, -x, top, bottom, +z, -z) and per ambient occlusion level
+    face_light: Array[f32] (.{ 0.74, 0.74, 1.0, 0.55, 0.86, 0.86 })
+    ao_light: Array[f32] (.{ 0.42, 0.62, 0.8, 1.0 })
+    // Scratch for the face being built, and the two ways to split a quad
+    ao: Array[uint] (.{ 0, 0, 0, 0 })
+    positions: Array[raylib.Vector3] (Array[raylib.Vector3].fill(4, .{}))
+    uvs: Array[raylib.Vector2] (Array[raylib.Vector2].fill(4, .{}))
+    colors: Array[raylib.Color] (Array[raylib.Color].fill(4, .{}))
+    straight: Array[uint] (.{ 0, 1, 2, 0, 2, 3 })
+    flipped: Array[uint] (.{ 1, 2, 3, 1, 3, 0 })
+
+    fn at(x: int, y: int, z: int) Block {
+        if y < 0 : return Block.bedrock
+        if y >= WORLD_HEIGHT : return Block.air
+        return this.padded[((y * 18 + z + 1) * 18 + x + 1).to(uint)]
+    }
+
+    fn fill(world: World, chunk: Chunk) int {
+        let top = chunk.top
+        let dz = -1
+        while dz <= 16 {
+            let dx = -1
+            while dx <= 16 {
+                let source = chunk
+                let lx = dx
+                let lz = dz
+                if dx < 0 || dx >= 16 || dz < 0 || dz >= 16 {
+                    let ncx = chunk.cx + (dx < 0 ? -1 : (dx >= 16 ? 1 : 0))
+                    let ncz = chunk.cz + (dz < 0 ? -1 : (dz >= 16 ? 1 : 0))
+                    lx = (dx + 16) % 16
+                    lz = (dz + 16) % 16
+                    let neighbor = world.chunk(ncx, ncz)
+                    if !isset(neighbor) {
+                        let y = 0
+                        while y < WORLD_HEIGHT {
+                            this.padded[((y * 18 + dz + 1) * 18 + dx + 1).to(uint)] = Block.air
+                            y++
+                        }
+                        dx++
+                        continue
+                    }
+                    source = neighbor
+                }
+                if source.top > top : top = source.top
+                let y = 0
+                while y < WORLD_HEIGHT {
+                    this.padded[((y * 18 + dz + 1) * 18 + dx + 1).to(uint)] = source.get(lx, y, lz)
+                    y++
+                }
+                dx++
+            }
+            dz++
+        }
+        return top
+    }
+
+    fn build(world: World, chunk: Chunk) {
+        let top = this.fill(world, chunk)
+        this.solid.clear()
+        this.water.clear()
+        let y = 0
+        while y <= top && y < WORLD_HEIGHT {
+            each 0 .. CHUNK_SIZE as z {
+                each 0 .. CHUNK_SIZE as x {
+                    let block = this.at(x, y, z)
+                    if block == Block.air : continue
+                    each 0 .. 6 as face {
+                        let f = face.to(uint)
+                        let neighbor = this.at(x + this.normals[f * 3], y + this.normals[f * 3 + 1], z + this.normals[f * 3 + 2])
+                        if !face_visible(block, neighbor) : continue
+                        if block == Block.water {
+                            this.water_face(x, y, z, f, neighbor)
+                        } else {
+                            this.face(block, x, y, z, f)
+                        }
+                    }
+                }
+            }
+            y++
+        }
+        chunk.unload_meshes()
+        if this.solid.vertex_count > 0 {
+            // Once on the GPU, raylib's copy of the vertices is not needed
+            chunk.solid = this.solid.build(this.upload, false, false)
+            chunk.has_solid = true
+        }
+        if this.water.vertex_count > 0 {
+            chunk.water = this.water.build(this.upload, false, false)
+            chunk.has_water = true
+        }
+        chunk.dirty = false
+    }
+
+    // Is the block at this spot one that darkens the corners next to it
+    fn occludes(x: int, y: int, z: int) int {
+        return is_opaque(this.at(x, y, z)) ? 1 : 0
+    }
+
+    fn face(block: Block, x: int, y: int, z: int, f: uint) {
+        let nx = this.normals[f * 3]
+        let ny = this.normals[f * 3 + 1]
+        let nz = this.normals[f * 3 + 2]
+        let fx = x + nx
+        let fy = y + ny
+        let fz = z + nz
+        let light = this.face_light[f]
+        let i : uint = 0
+        while i < 4 {
+            let c = f * 12 + i * 3
+            let cx = this.corners[c]
+            let cy = this.corners[c + 1]
+            let cz = this.corners[c + 2]
+            // The two neighbours along the face, towards this corner, and the one between them
+            let sx = nx != 0 ? 0 : cx * 2 - 1
+            let sy = ny != 0 ? 0 : cy * 2 - 1
+            let sz = nz != 0 ? 0 : cz * 2 - 1
+            let side1 = 0
+            let side2 = 0
+            if nz != 0 {
+                side1 = this.occludes(fx + sx, fy, fz)
+                side2 = this.occludes(fx, fy + sy, fz)
+            } else if ny != 0 {
+                side1 = this.occludes(fx + sx, fy, fz)
+                side2 = this.occludes(fx, fy, fz + sz)
+            } else {
+                side1 = this.occludes(fx, fy + sy, fz)
+                side2 = this.occludes(fx, fy, fz + sz)
+            }
+            let corner = this.occludes(fx + sx, fy + sy, fz + sz)
+            let level = (side1 == 1 && side2 == 1) ? 0 : 3 - side1 - side2 - corner
+            this.ao[i] = level.to(uint)
+            this.positions[i] = raylib.Vector3{ x: (x + cx).to(f32), y: (y + cy).to(f32), z: (z + cz).to(f32) }
+            let v = (255 * light * this.ao_light[level.to(uint)]).to(u8)
+            this.colors[i] = raylib.Color{ r: v, g: v, b: v, a: 255 }
+            i++
+        }
+        this.set_uvs(block_tile(block, f))
+        let normal = raylib.Vector3{ x: nx.to(f32), y: ny.to(f32), z: nz.to(f32) }
+        // Split the quad along the brighter diagonal so the shading does not crease
+        let order = this.ao[0] + this.ao[2] < this.ao[1] + this.ao[3] ? this.flipped : this.straight
+        each order as k : this.solid.vertex(this.positions[k], this.uvs[k], normal, this.colors[k])
+    }
+
+    fn set_uvs(tile: uint) {
+        let u0, v0, u1, v1 = tile_uv(tile)
+        this.uvs[0] = raylib.Vector2{ x: u0, y: v1 }
+        this.uvs[1] = raylib.Vector2{ x: u1, y: v1 }
+        this.uvs[2] = raylib.Vector2{ x: u1, y: v0 }
+        this.uvs[3] = raylib.Vector2{ x: u0, y: v0 }
+    }
+
+    // Water: no shading, and the top a little lower than a full block
+    fn water_face(x: int, y: int, z: int, f: uint, neighbor: Block) {
+        if neighbor != Block.air : return
+        let normal = raylib.Vector3{ x: this.normals[f * 3].to(f32), y: this.normals[f * 3 + 1].to(f32), z: this.normals[f * 3 + 2].to(f32) }
+        let lowered = this.at(x, y + 1, z) != Block.water
+        let i : uint = 0
+        while i < 4 {
+            let c = f * 12 + i * 3
+            let cy = this.corners[c + 1].to(f32)
+            if lowered && cy > 0 : cy = 0.88
+            this.positions[i] = raylib.Vector3{ x: (x + this.corners[c]).to(f32), y: y.to(f32) + cy, z: (z + this.corners[c + 2]).to(f32) }
+            i++
+        }
+        this.set_uvs(TILE_WATER)
+        let light = (255 * this.face_light[f]).to(u8)
+        let color = raylib.Color{ r: light, g: light, b: light, a: 255 }
+        each this.straight as k : this.water.vertex(this.positions[k], this.uvs[k], normal, color)
+    }
+}

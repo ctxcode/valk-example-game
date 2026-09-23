@@ -1,0 +1,44 @@
+// A layer of flat clouds that drifts across the sky
+
+use raylib
+use valk.math
+
+value CLOUD_HEIGHT (108.0)
+value CLOUD_CELL (12)
+
+class Clouds {
+    noise: Noise
+
+    fn draw(camera: raylib.Camera3D, time: f32, reach: f32) {
+        // Drift along x; the cells move, the pattern stays
+        let drift = time * 1.5
+        let cell = CLOUD_CELL.to(f32)
+        let center_x = math.floor((camera.position.x - drift) / cell).to(int)
+        let center_z = math.floor(camera.position.z / cell).to(int)
+        let cells = (reach / cell).to(int) + 1
+        let dz = -cells
+        while dz <= cells {
+            let dx = -cells
+            while dx <= cells {
+                let gx = center_x + dx
+                let gz = center_z + dz
+                if this.noise.noise2(gx.to(float) * 0.23, gz.to(float) * 0.23) > 0.18 {
+                    let position = raylib.Vector3{
+                        x: (gx.to(f32) + 0.5) * cell + drift
+                        y: CLOUD_HEIGHT.to(f32)
+                        z: (gz.to(f32) + 0.5) * cell
+                    }
+                    let flat = raylib.Vector2{ x: position.x - camera.position.x, y: position.z - camera.position.z }
+                    let fade = 1 - flat.length() / reach
+                    if fade > 0 {
+                        let strength : f32 = fade > 0.5 ? 1 : fade * 2
+                        let alpha = strength * 210
+                        raylib.draw_cube(position, cell, 3, cell, raylib.Color.rgba(255, 255, 255, alpha.to(u8)))
+                    }
+                }
+                dx++
+            }
+            dz++
+        }
+    }
+}
