@@ -374,12 +374,12 @@ test "Game: falls hurt in survival, and dying drops everything" {
     assert(game.death_cause == "fell from a high place")
     assert(game.inventory.count(Item.planks) == 0 && game.drops.length == 1)
     game.respawn()
-    assert(!game.dead && game.player.health == MAX_HEALTH.to(f32))
+    assert(!game.dead && game.player.health == MAX_HEALTH)
 
     let creative = test_game(true)
     creative.player = Player.at(.{ x: 4.5, y: 40, z: 4.5 })
     each 0 .. 240 as _ : creative.update_player(1.0 / 60, false)
-    assert(creative.player.health == MAX_HEALTH.to(f32))
+    assert(creative.player.health == MAX_HEALTH)
 }
 
 test "Animals: they fall, get hurt, die and leave loot" {
@@ -475,7 +475,7 @@ test "Player: crouching stays on the edge, and under a low ceiling" {
     player.update(world, 1.0 / 60, false)
     assert(player.body.on_ground)
     player.crouch(world, true, 1)
-    assert(player.crouching && player.body.height == CROUCH_HEIGHT.to(f32))
+    assert(player.crouching && player.body.height == CROUCH_HEIGHT)
     // Walking off the only block: the edge holds
     player.body.edge_guard = true
     each 0 .. 20 as _ : player.body.move_axis(world, 0, 0.1)
@@ -494,7 +494,7 @@ test "Player: crouching stays on the edge, and under a low ceiling" {
     assert(under.crouching)
     under.body.position.x = 3.5
     under.crouch(low, false, 1)
-    assert(!under.crouching && under.body.height == PLAYER_HEIGHT.to(f32))
+    assert(!under.crouching && under.body.height == PLAYER_HEIGHT)
 }
 
 test "Game: switching to survival mid-air starts a fall there" {

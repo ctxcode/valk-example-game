@@ -148,7 +148,7 @@ class Player {
     eye_height: f32 (EYE_HEIGHT)
 
     static fn at(position: raylib.Vector3) Player {
-        let body = Body{ position: position, half: PLAYER_HALF_WIDTH.to(f32), height: PLAYER_HEIGHT.to(f32) }
+        let body = Body{ position: position, half: PLAYER_HALF_WIDTH, height: PLAYER_HEIGHT }
         return Player{ body: body, fall_top: position.y }
     }
 
@@ -176,8 +176,8 @@ class Player {
     }
 
     fn look(delta: raylib.Vector2) {
-        this.yaw += delta.x * MOUSE_SENSITIVITY.to(f32)
-        this.pitch -= delta.y * MOUSE_SENSITIVITY.to(f32)
+        this.yaw += delta.x * MOUSE_SENSITIVITY
+        this.pitch -= delta.y * MOUSE_SENSITIVITY
         let limit : f32 = 1.55
         if this.pitch > limit : this.pitch = limit
         if this.pitch < -limit : this.pitch = -limit
@@ -209,13 +209,13 @@ class Player {
         this.crouch(world, crouch && !this.flying, dt)
 
         if this.flying {
-            let speed = FLY_SPEED.to(f32) * (sprint ? 2 : 1)
+            let speed : f32 = FLY_SPEED * (sprint ? 2 : 1)
             body.velocity = wish.scale(speed)
             if jump : body.velocity.y = speed
             if crouch : body.velocity.y = -speed
         } else {
             let speed = (sprint && !this.crouching ? SPRINT_SPEED : WALK_SPEED).to(f32)
-            if this.crouching : speed = CROUCH_SPEED.to(f32)
+            if this.crouching : speed = CROUCH_SPEED
             if this.in_water : speed *= 0.55
             // Quick to change direction on the ground, slow in the air
             let grip : f32 = body.on_ground ? 14 : 3
@@ -223,12 +223,12 @@ class Player {
             body.velocity.x += (wish.x * speed - body.velocity.x) * blend
             body.velocity.z += (wish.z * speed - body.velocity.z) * blend
             if this.in_water {
-                body.velocity.y -= GRAVITY.to(f32) * 0.25 * dt
+                body.velocity.y -= GRAVITY * 0.25 * dt
                 if jump : body.velocity.y = 3.5
                 if body.velocity.y < -3 : body.velocity.y = -3
             } else {
-                body.velocity.y -= GRAVITY.to(f32) * dt
-                if body.on_ground && jump : body.velocity.y = JUMP_SPEED.to(f32)
+                body.velocity.y -= GRAVITY * dt
+                if body.on_ground && jump : body.velocity.y = JUMP_SPEED
                 if body.velocity.y < -50 : body.velocity.y = -50
             }
         }
@@ -252,11 +252,11 @@ class Player {
     fn crouch(world: World, want: bool, dt: f32) {
         if want && !this.crouching {
             this.crouching = true
-            this.body.height = CROUCH_HEIGHT.to(f32)
+            this.body.height = CROUCH_HEIGHT
         } else if !want && this.crouching {
-            this.body.height = PLAYER_HEIGHT.to(f32)
+            this.body.height = PLAYER_HEIGHT
             if this.body.collides(world, this.body.position) {
-                this.body.height = CROUCH_HEIGHT.to(f32)
+                this.body.height = CROUCH_HEIGHT
             } else {
                 this.crouching = false
             }
@@ -271,7 +271,7 @@ class Player {
         let eye = this.eye()
         let under = world.block(math.floor(eye.x).to(int), math.floor(eye.y).to(int), math.floor(eye.z).to(int)) == Block.water
         if !under {
-            this.breath = MAX_BREATH.to(f32)
+            this.breath = MAX_BREATH
             return 0
         }
         this.breath -= dt

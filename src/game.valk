@@ -198,7 +198,7 @@ class Game {
         if drowning > 0 : this.damage_player(drowning, "drowned")
         if player.body.position.y < -8 : this.damage_player(4 * dt, "fell out of the world")
         // Slowly heals
-        if player.health < MAX_HEALTH.to(f32) && player.health > 0 {
+        if player.health < MAX_HEALTH && player.health > 0 {
             this.regen += dt
             if this.regen >= 4 {
                 this.regen = 0
@@ -297,9 +297,9 @@ class Game {
     fn aim() {
         let eye = this.player.eye()
         let forward = this.player.forward()
-        this.target = this.world.raycast(eye, forward, REACH.to(f32))
+        this.target = this.world.raycast(eye, forward, REACH)
         this.target_mob = null
-        let nearest = REACH.to(f32)
+        let nearest : f32 = REACH
         let block = this.target
         if isset(block) : nearest = block.distance
         each this.mobs as mob {
@@ -361,7 +361,7 @@ class Game {
         if this.break_cooldown > 0 : return
         if this.creative {
             this.break_block(target.x, target.y, target.z)
-            this.break_cooldown = REPEAT_DELAY.to(f32)
+            this.break_cooldown = REPEAT_DELAY
             return
         }
         if !this.digging || target.x != this.dig_x || target.y != this.dig_y || target.z != this.dig_z {
@@ -413,8 +413,8 @@ class Game {
             return
         }
         let food = food_value(held.item)
-        if food > 0 && !this.creative && this.player.health < MAX_HEALTH.to(f32) {
-            this.player.health = this.player.health + food > MAX_HEALTH.to(f32) ? MAX_HEALTH.to(f32) : this.player.health + food
+        if food > 0 && !this.creative && this.player.health < MAX_HEALTH {
+            this.player.health = this.player.health + food > MAX_HEALTH ? MAX_HEALTH : this.player.health + food
             this.inventory.take_one(this.selected)
             this.use_cooldown = 0.5
             return
@@ -433,7 +433,7 @@ class Game {
         }
         this.world.set_block(x, y, z, block)
         if !this.creative : this.inventory.take_one(this.selected)
-        this.use_cooldown = REPEAT_DELAY.to(f32)
+        this.use_cooldown = REPEAT_DELAY
     }
 
     // Throws one of the held item ahead
@@ -525,7 +525,7 @@ class Game {
             let center = drop.center()
             let block = item_block(drop.stack.item)
             if block != Block.air {
-                let size = DROP_SIZE.to(f32)
+                let size : f32 = DROP_SIZE
                 let m = raylib.Matrix.scaling(size, size, size).multiply(raylib.Matrix.rotate_y(drop.age * 1.5)).multiply(raylib.Matrix.translate(center.x, center.y, center.z))
                 raylib.draw_mesh(res.cube(block), res.material, m)
             } else {
@@ -537,7 +537,7 @@ class Game {
         if isset(target) {
             let progress = this.dig_progress()
             if progress > 0 {
-                let stage = (progress * CRACK_STAGES.to(f32)).to(uint)
+                let stage = (progress * CRACK_STAGES).to(uint)
                 if stage >= CRACK_STAGES : stage = CRACK_STAGES - 1
                 raylib.draw_mesh(res.cracks[stage], res.material, raylib.Matrix.translate(target.x.to(f32), target.y.to(f32), target.z.to(f32)))
             }

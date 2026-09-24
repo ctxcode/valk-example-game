@@ -12,7 +12,7 @@ class Clouds {
     fn draw(camera: raylib.Camera3D, time: f32, reach: f32) {
         // Drift along x; the cells move, the pattern stays
         let drift = time * 1.5
-        let cell = CLOUD_CELL.to(f32)
+        let cell : f32 = CLOUD_CELL
         let center_x = math.floor((camera.position.x - drift) / cell).to(int)
         let center_z = math.floor(camera.position.z / cell).to(int)
         let cells = (reach / cell).to(int) + 1
@@ -25,7 +25,7 @@ class Clouds {
                 if this.noise.noise2(gx.to(float) * 0.23, gz.to(float) * 0.23) > 0.18 {
                     let position = raylib.Vector3{
                         x: (gx.to(f32) + 0.5) * cell + drift
-                        y: CLOUD_HEIGHT.to(f32)
+                        y: CLOUD_HEIGHT
                         z: (gz.to(f32) + 0.5) * cell
                     }
                     let flat = raylib.Vector2{ x: position.x - camera.position.x, y: position.z - camera.position.z }

@@ -34,7 +34,7 @@ class Terrain {
         // Ridged noise: sharp crests where the noise crosses zero
         let ridge = 1 - math.abs(this.ridges.fbm2(fx * 0.0075, fz * 0.0075, 4))
         let mountain_area = clamp_float((continent - 0.05) * 3, 0, 1)
-        let h = SEA_LEVEL.to(float) + 3 + continent * 18 + hills * 5 + mountain_area * ridge * ridge * ridge * 40
+        let h : float = SEA_LEVEL + 3 + continent * 18 + hills * 5 + mountain_area * ridge * ridge * ridge * 40
         let top = math.floor(h).to(int)
         if top < 4 : return 4
         if top > WORLD_HEIGHT - 16 : return WORLD_HEIGHT - 16

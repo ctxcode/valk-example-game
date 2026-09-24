@@ -185,8 +185,8 @@ class App {
         }
         let yaw = o.yaw
         let pitch = o.pitch
-        if isset(yaw) : game.player.yaw = yaw * raylib.DEG2RAD.to(f32)
-        if isset(pitch) : game.player.pitch = pitch * raylib.DEG2RAD.to(f32)
+        if isset(yaw) : game.player.yaw = yaw * raylib.DEG2RAD
+        if isset(pitch) : game.player.pitch = pitch * raylib.DEG2RAD
         if o.kit : give_kit(game)
         if o.animals {
             // One of each, in a row in front of the player

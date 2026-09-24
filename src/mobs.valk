@@ -128,7 +128,7 @@ class Mob {
             this.dying += dt
             this.body.velocity.x *= 0.9
             this.body.velocity.z *= 0.9
-            this.body.velocity.y -= GRAVITY.to(f32) * dt
+            this.body.velocity.y -= GRAVITY * dt
             this.body.move(world, dt)
             return
         }
@@ -176,7 +176,7 @@ class Mob {
             // Animals float
             this.body.velocity.y += (1.5 - this.body.velocity.y) * blend
         } else {
-            this.body.velocity.y -= GRAVITY.to(f32) * dt
+            this.body.velocity.y -= GRAVITY * dt
         }
         let was_blocked = this.body.blocked
         this.body.move(world, dt)

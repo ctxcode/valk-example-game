@@ -12,7 +12,7 @@ fn draw_crosshair() {
 }
 
 fn hotbar_left() i32 {
-    return (screen_width() - HOTBAR_SIZE.to(i32) * 54) / 2
+    return (screen_width() - HOTBAR_SIZE * 54) / 2
 }
 
 fn draw_hotbar(ui: Ui, game: Game) {
@@ -20,7 +20,7 @@ fn draw_hotbar(ui: Ui, game: Game) {
     let step : i32 = 54
     let x0 = hotbar_left()
     let y = screen_height() - slot - 12
-    raylib.draw_rectangle(x0 - 6, y - 6, HOTBAR_SIZE.to(i32) * step + 8, slot + 12, raylib.Color.rgba(0, 0, 0, 120))
+    raylib.draw_rectangle(x0 - 6, y - 6, HOTBAR_SIZE * step + 8, slot + 12, raylib.Color.rgba(0, 0, 0, 120))
     each 0 .. HOTBAR_SIZE as i {
         let x = x0 + i.to(i32) * step
         let active = i.to(uint) == game.selected
@@ -49,9 +49,9 @@ fn draw_health(res: Resources, game: Game) {
         let shake : f32 = player.health <= 4 ? (raylib.get_random_value(-1, 1)).to(f32) : 0
         res.draw_sprite(sprite, x, y + shake, size, size, 7, 7)
     }
-    if player.breath < MAX_BREATH.to(f32) {
+    if player.breath < MAX_BREATH {
         let bubbles = (player.breath + 0.99).to(int)
-        let right = x0 + (HOTBAR_SIZE.to(i32) * 54).to(f32)
+        let right = x0 + HOTBAR_SIZE * 54
         each 0 .. bubbles as i {
             res.draw_sprite(SPRITE_BUBBLE, right - (i + 1).to(f32) * 22, y, 18, 18, 5, 5)
         }

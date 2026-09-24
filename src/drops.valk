@@ -15,7 +15,7 @@ class Drop {
 
     static fn at(stack: Stack, position: raylib.Vector3, velocity: raylib.Vector3) Drop {
         let half = (DROP_SIZE / 2).to(f32)
-        let body = Body{ position: position, velocity: velocity, half: half, height: DROP_SIZE.to(f32) }
+        let body = Body{ position: position, velocity: velocity, half: half, height: DROP_SIZE }
         return Drop{ stack: stack, body: body }
     }
 
@@ -32,7 +32,7 @@ class Drop {
         if in_water {
             this.body.velocity.y += (1 - this.body.velocity.y) * 4 * dt
         } else {
-            this.body.velocity.y -= GRAVITY.to(f32) * dt
+            this.body.velocity.y -= GRAVITY * dt
         }
         let drag : f32 = this.body.on_ground ? 8 : 1
         let keep : f32 = 1 - drag * dt > 0 ? 1 - drag * dt : 0
@@ -42,16 +42,16 @@ class Drop {
     }
 
     fn can_pick_up() bool {
-        return this.age >= PICKUP_DELAY.to(f32)
+        return this.age >= PICKUP_DELAY
     }
 
     fn expired() bool {
-        return this.age > DROP_LIFETIME.to(f32) || this.body.position.y < -10
+        return this.age > DROP_LIFETIME || this.body.position.y < -10
     }
 
     // Center of the spinning item, bobbing up and down
     fn center() raylib.Vector3 {
         let bob = (math.sin(this.age.to(float) * 2.5) * 0.06 + 0.06).to(f32)
-        return this.body.position + raylib.Vector3{ y: DROP_SIZE.to(f32) / 2 + bob }
+        return this.body.position + raylib.Vector3{ y: DROP_SIZE / 2 + bob }
     }
 }

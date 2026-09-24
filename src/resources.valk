@@ -91,7 +91,7 @@ class Resources {
         each all_items() as item {
             let block = item_block(item)
             if block == Block.air : continue
-            let target = raylib.load_render_texture(ICON_SIZE.to(i32), ICON_SIZE.to(i32))
+            let target = raylib.load_render_texture(ICON_SIZE, ICON_SIZE)
             raylib.begin_texture_mode(target)
             raylib.clear_background(raylib.BLANK)
             raylib.begin_mode_3d(camera)
@@ -109,7 +109,7 @@ class Resources {
         if item_block(item) != Block.air {
             let icon = this.icons[item.to(uint)]
             // Render textures are upside down
-            let source = raylib.Rectangle{ x: 0, y: 0, width: ICON_SIZE.to(f32), height: -ICON_SIZE.to(f32) }
+            let source = raylib.Rectangle{ x: 0, y: 0, width: ICON_SIZE, height: -ICON_SIZE }
             raylib.draw_texture_pro(icon.texture, source, dest, .{}, 0, raylib.WHITE)
             return
         }

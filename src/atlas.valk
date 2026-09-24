@@ -14,15 +14,15 @@ fn tile_uv(tile: uint) (f32, f32, f32, f32) {
     let x = ((tile % ATLAS_COLUMNS) * TILE_SIZE).to(f32)
     let y = ((tile / ATLAS_COLUMNS) * TILE_SIZE).to(f32)
     let inset : f32 = 0.05
-    return ((x + inset) / w, (y + inset) / h, (x + TILE_SIZE.to(f32) - inset) / w, (y + TILE_SIZE.to(f32) - inset) / h)
+    return ((x + inset) / w, (y + inset) / h, (x + TILE_SIZE - inset) / w, (y + TILE_SIZE - inset) / h)
 }
 
 fn tile_rectangle(tile: uint) raylib.Rectangle {
     return raylib.Rectangle{
         x: ((tile % ATLAS_COLUMNS) * TILE_SIZE).to(f32)
         y: ((tile / ATLAS_COLUMNS) * TILE_SIZE).to(f32)
-        width: TILE_SIZE.to(f32)
-        height: TILE_SIZE.to(f32)
+        width: TILE_SIZE
+        height: TILE_SIZE
     }
 }
 

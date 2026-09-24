@@ -64,7 +64,7 @@ fn quick_move(game: Game, index: uint) {
 fn inventory_row(ui: Ui, game: Game, first: uint, x: i32, y: i32) {
     each 0 .. HOTBAR_SIZE as i {
         let index = first + i.to(uint)
-        let hot = ui.slot(game.inventory.get(index), x + i.to(i32) * SLOT_STEP.to(i32), y, SLOT.to(i32))
+        let hot = ui.slot(game.inventory.get(index), x + i.to(i32) * SLOT_STEP, y, SLOT)
         if !hot : continue
         if ui.clicked && ui.shift : quick_move(game, index)
         else if ui.clicked : click_slot(game, game.inventory.slots, index, false)
@@ -75,7 +75,7 @@ fn inventory_row(ui: Ui, game: Game, first: uint, x: i32, y: i32) {
 // Draws the window and handles the mouse in it
 fn inventory_screen(ui: Ui, game: Game) {
     raylib.draw_rectangle(0, 0, screen_width(), screen_height(), raylib.Color.rgba(0, 0, 0, 130))
-    let step = SLOT_STEP.to(i32)
+    let step : i32 = SLOT_STEP
     let width = 9 * step + 36
     let top_rows : i32 = game.creative ? 4 : (game.craft_size == 3 ? 3 : 2)
     let height = 60 + top_rows * step + 30 + (game.creative ? 0 : 3 * step + 12) + step + 24
@@ -93,7 +93,7 @@ fn inventory_screen(ui: Ui, game: Game) {
             let sx = left + (i % 9).to(i32) * step
             let sy = y + 46 + (i / 9).to(i32) * step
             let stack = stack_of(item, 1)
-            let hot = ui.slot(stack, sx, sy, SLOT.to(i32))
+            let hot = ui.slot(stack, sx, sy, SLOT)
             if hot && (ui.clicked || ui.right_clicked) {
                 // A full stack, or one with the right button; a stack on the mouse goes away
                 if !is_empty(game.cursor) {
@@ -114,7 +114,7 @@ fn inventory_screen(ui: Ui, game: Game) {
         each 0 .. size as gy {
             each 0 .. size as gx {
                 let index = gy.to(uint) * size + gx.to(uint)
-                let hot = ui.slot(game.craft[index], grid_x + gx.to(i32) * step, y + 46 + gy.to(i32) * step, SLOT.to(i32))
+                let hot = ui.slot(game.craft[index], grid_x + gx.to(i32) * step, y + 46 + gy.to(i32) * step, SLOT)
                 if !hot : continue
                 if ui.clicked && ui.shift {
                     game.craft[index] = game.inventory.add(game.craft[index])
@@ -134,7 +134,7 @@ fn inventory_screen(ui: Ui, game: Game) {
         let recipe = game.craft_recipe()
         let result = isset(recipe) ? stack_of(recipe.result, recipe.count) : Stack{}
         let result_x = arrow_x + 80
-        let hot = ui.slot(result, result_x, middle, SLOT.to(i32))
+        let hot = ui.slot(result, result_x, middle, SLOT)
         if hot && ui.clicked : game.take_craft(ui.shift)
 
         let main_y = y + 46 + top_rows * step + 30
@@ -160,7 +160,7 @@ fn inventory_screen(ui: Ui, game: Game) {
     ui.draw_tooltip()
     // The stack on the mouse, on top of everything
     if !is_empty(game.cursor) {
-        let size = SLOT.to(f32)
+        let size : f32 = SLOT
         ui.stack(game.cursor, ui.mouse.x - size / 2, ui.mouse.y - size / 2, size)
     }
 }
