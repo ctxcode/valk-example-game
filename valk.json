@@ -6,8 +6,8 @@
         "raylib": {
             "src": "github.com/ctxcode/valk-raylib",
             "version": "0.1.x",
-            "current": "0.1.2",
-            "current_hash": "90bcfbd9f7e620026494c9b336469b220a194a3e"
+            "current": "0.1.3",
+            "current_hash": "c0d0288802a55298db5c0fea83ae912240fd7ccc"
         }
     }
 }
