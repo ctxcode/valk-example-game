@@ -22,7 +22,7 @@ class Noise {
         return Noise{ perm: perm }
     }
 
-    - fn hash(i: int) uint {
+    - fn permute(i: int) uint {
         return this.perm[(i & 255).to(uint)].to(uint)
     }
 
@@ -36,10 +36,10 @@ class Noise {
         let yf = y - fy
         let u = fade(xf)
         let v = fade(yf)
-        let aa = this.hash(this.hash(xi).to(int) + yi)
-        let ab = this.hash(this.hash(xi).to(int) + yi + 1)
-        let ba = this.hash(this.hash(xi + 1).to(int) + yi)
-        let bb = this.hash(this.hash(xi + 1).to(int) + yi + 1)
+        let aa = this.permute(this.permute(xi).to(int) + yi)
+        let ab = this.permute(this.permute(xi).to(int) + yi + 1)
+        let ba = this.permute(this.permute(xi + 1).to(int) + yi)
+        let bb = this.permute(this.permute(xi + 1).to(int) + yi + 1)
         let x1 = lerp(grad2(aa, xf, yf), grad2(ba, xf - 1, yf), u)
         let x2 = lerp(grad2(ab, xf, yf - 1), grad2(bb, xf - 1, yf - 1), u)
         return lerp(x1, x2, v)
@@ -58,17 +58,17 @@ class Noise {
         let u = fade(xf)
         let v = fade(yf)
         let w = fade(zf)
-        let a = this.hash(xi).to(int) + yi
-        let aa = this.hash(a).to(int) + zi
-        let ab = this.hash(a + 1).to(int) + zi
-        let b = this.hash(xi + 1).to(int) + yi
-        let ba = this.hash(b).to(int) + zi
-        let bb = this.hash(b + 1).to(int) + zi
-        let x1 = lerp(grad3(this.hash(aa), xf, yf, zf), grad3(this.hash(ba), xf - 1, yf, zf), u)
-        let x2 = lerp(grad3(this.hash(ab), xf, yf - 1, zf), grad3(this.hash(bb), xf - 1, yf - 1, zf), u)
+        let a = this.permute(xi).to(int) + yi
+        let aa = this.permute(a).to(int) + zi
+        let ab = this.permute(a + 1).to(int) + zi
+        let b = this.permute(xi + 1).to(int) + yi
+        let ba = this.permute(b).to(int) + zi
+        let bb = this.permute(b + 1).to(int) + zi
+        let x1 = lerp(grad3(this.permute(aa), xf, yf, zf), grad3(this.permute(ba), xf - 1, yf, zf), u)
+        let x2 = lerp(grad3(this.permute(ab), xf, yf - 1, zf), grad3(this.permute(bb), xf - 1, yf - 1, zf), u)
         let y1 = lerp(x1, x2, v)
-        let x3 = lerp(grad3(this.hash(aa + 1), xf, yf, zf - 1), grad3(this.hash(ba + 1), xf - 1, yf, zf - 1), u)
-        let x4 = lerp(grad3(this.hash(ab + 1), xf, yf - 1, zf - 1), grad3(this.hash(bb + 1), xf - 1, yf - 1, zf - 1), u)
+        let x3 = lerp(grad3(this.permute(aa + 1), xf, yf, zf - 1), grad3(this.permute(ba + 1), xf - 1, yf, zf - 1), u)
+        let x4 = lerp(grad3(this.permute(ab + 1), xf, yf - 1, zf - 1), grad3(this.permute(bb + 1), xf - 1, yf - 1, zf - 1), u)
         let y2 = lerp(x3, x4, v)
         return lerp(y1, y2, w)
     }

@@ -11,7 +11,7 @@ creative with every block.
 
 ## Play
 
-It needs Valk 0.7.7 or newer, and raylib 6.0. With raylib installed (`pacman -S raylib`,
+It needs Valk 0.8.1 or newer, and raylib 6.0. With raylib installed (`pacman -S raylib`,
 `brew install raylib`, see [valk-raylib](https://github.com/ctxcode/valk-raylib#requirements))
 it uses that one; otherwise `make deps` downloads raylib's own build of it into
 `vendor/raylib`.

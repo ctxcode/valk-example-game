@@ -1,7 +1,7 @@
 # Settings of this checkout only, e.g. `vc := ~/src/valk/valk` for a compiler of your own
 -include local.mk
 vc ?= valk
-VALK_MIN := 0.7.7
+VALK_MIN := 0.8.1
 RAYLIB_VERSION := 6.0
 
 # The directory with libraylib. Left empty, the system's raylib is used, or the one
